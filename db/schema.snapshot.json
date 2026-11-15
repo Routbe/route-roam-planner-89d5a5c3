@@ -5452,6 +5452,16 @@
           "cmd": "ALL",
           "using": "((user_id = rout_current_user_id()) OR ((workspace_id IS NOT NULL) AND rout_is_workspace_member(workspace_id)))",
           "check": "((user_id = rout_current_user_id()) OR ((workspace_id IS NOT NULL) AND rout_is_workspace_member(workspace_id)))"
+        },
+        {
+          "name": "rout_ws_insert_guard",
+          "permissive": false,
+          "roles": [
+            "public"
+          ],
+          "cmd": "INSERT",
+          "using": null,
+          "check": "((workspace_id IS NULL) OR rout_is_workspace_member(workspace_id))"
         }
       ],
       "grants": {
@@ -6033,6 +6043,16 @@
           "cmd": "ALL",
           "using": "((host_user_id = rout_current_user_id()) OR ((workspace_id IS NOT NULL) AND rout_is_workspace_member(workspace_id)))",
           "check": "((host_user_id = rout_current_user_id()) OR ((workspace_id IS NOT NULL) AND rout_is_workspace_member(workspace_id)))"
+        },
+        {
+          "name": "rout_ws_insert_guard",
+          "permissive": false,
+          "roles": [
+            "public"
+          ],
+          "cmd": "INSERT",
+          "using": null,
+          "check": "((workspace_id IS NULL) OR rout_is_workspace_member(workspace_id))"
         }
       ],
       "grants": {
@@ -12330,6 +12350,16 @@
           "cmd": "UPDATE",
           "using": "((workspace_id IS NOT NULL) AND (rout_workspace_role(workspace_id) = ANY (ARRAY['owner'::text, 'admin'::text, 'developer'::text])))",
           "check": "((workspace_id IS NOT NULL) AND (rout_workspace_role(workspace_id) = ANY (ARRAY['owner'::text, 'admin'::text, 'developer'::text])))"
+        },
+        {
+          "name": "rout_ws_insert_guard",
+          "permissive": false,
+          "roles": [
+            "public"
+          ],
+          "cmd": "INSERT",
+          "using": null,
+          "check": "((workspace_id IS NULL) OR rout_is_workspace_member(workspace_id))"
         }
       ],
       "grants": {
@@ -19021,6 +19051,16 @@
           "cmd": "ALL",
           "using": "(user_id = rout_current_user_id())",
           "check": "(user_id = rout_current_user_id())"
+        },
+        {
+          "name": "rout_ws_insert_guard",
+          "permissive": false,
+          "roles": [
+            "public"
+          ],
+          "cmd": "INSERT",
+          "using": null,
+          "check": "((workspace_id IS NULL) OR rout_is_workspace_member(workspace_id))"
         }
       ],
       "grants": {
@@ -21392,6 +21432,16 @@
           "cmd": "ALL",
           "using": "((user_id = rout_current_user_id()) OR ((workspace_id IS NOT NULL) AND rout_is_workspace_member(workspace_id)))",
           "check": "((user_id = rout_current_user_id()) OR ((workspace_id IS NOT NULL) AND rout_is_workspace_member(workspace_id)))"
+        },
+        {
+          "name": "rout_ws_insert_guard",
+          "permissive": false,
+          "roles": [
+            "public"
+          ],
+          "cmd": "INSERT",
+          "using": null,
+          "check": "((workspace_id IS NULL) OR rout_is_workspace_member(workspace_id))"
         }
       ],
       "grants": {
@@ -21636,6 +21686,16 @@
           "cmd": "ALL",
           "using": "((user_id = rout_current_user_id()) OR ((workspace_id IS NOT NULL) AND rout_is_workspace_member(workspace_id)))",
           "check": "((user_id = rout_current_user_id()) OR ((workspace_id IS NOT NULL) AND rout_is_workspace_member(workspace_id)))"
+        },
+        {
+          "name": "rout_ws_insert_guard",
+          "permissive": false,
+          "roles": [
+            "public"
+          ],
+          "cmd": "INSERT",
+          "using": null,
+          "check": "((workspace_id IS NULL) OR rout_is_workspace_member(workspace_id))"
         }
       ],
       "grants": {
@@ -25344,6 +25404,16 @@
           "cmd": "ALL",
           "using": "(owner_user_id = rout_current_user_id())",
           "check": "(owner_user_id = rout_current_user_id())"
+        },
+        {
+          "name": "rout_ws_insert_guard",
+          "permissive": false,
+          "roles": [
+            "public"
+          ],
+          "cmd": "INSERT",
+          "using": null,
+          "check": "((workspace_id IS NULL) OR rout_is_workspace_member(workspace_id))"
         }
       ],
       "grants": {
@@ -25684,14 +25754,34 @@
           "check": "true"
         },
         {
-          "name": "rout_scope",
+          "name": "rout_first_member",
           "permissive": true,
           "roles": [
             "public"
           ],
-          "cmd": "ALL",
+          "cmd": "INSERT",
+          "using": null,
+          "check": "((user_id = rout_current_user_id()) AND rout_workspace_claimable(workspace_id))"
+        },
+        {
+          "name": "rout_self_leave",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "cmd": "DELETE",
           "using": "(user_id = rout_current_user_id())",
-          "check": "(user_id = rout_current_user_id())"
+          "check": null
+        },
+        {
+          "name": "rout_self_read",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "cmd": "SELECT",
+          "using": "(user_id = rout_current_user_id())",
+          "check": null
         },
         {
           "name": "rout_team_add",
@@ -26305,6 +26395,16 @@
           "cmd": "ALL",
           "using": "((source_user_id = rout_current_user_id()) OR (target_user_id = rout_current_user_id()))",
           "check": "((source_user_id = rout_current_user_id()) OR (target_user_id = rout_current_user_id()))"
+        },
+        {
+          "name": "rout_ws_insert_guard",
+          "permissive": false,
+          "roles": [
+            "public"
+          ],
+          "cmd": "INSERT",
+          "using": null,
+          "check": "((workspace_id IS NULL) OR rout_is_workspace_member(workspace_id))"
         }
       ],
       "grants": {
@@ -30386,10 +30486,7 @@
       "def": "SELECT username\n   FROM profiles\n  WHERE username IS NOT NULL;",
       "grants": {
         "rout_app": [
-          "DELETE",
-          "INSERT",
-          "SELECT",
-          "UPDATE"
+          "SELECT"
         ]
       }
     },
@@ -30399,10 +30496,7 @@
       "def": "SELECT id,\n    username,\n    display_name,\n    tagline,\n    bio,\n    avatar_url,\n    favicon_url,\n    theme,\n    card_style,\n    blocks,\n    business_info,\n    tier,\n    status,\n    verified,\n    verified_at,\n    is_early_believer,\n    is_suspended,\n    is_banned,\n    subdomain_enabled,\n    custom_domain,\n    bluesky_did,\n    created_at,\n    show_email_publicly,\n    NULL::text AS forwarding_email\n   FROM profiles\n  WHERE username IS NOT NULL;",
       "grants": {
         "rout_app": [
-          "DELETE",
-          "INSERT",
-          "SELECT",
-          "UPDATE"
+          "SELECT"
         ]
       }
     },
@@ -32561,6 +32655,12 @@
       "name": "rout_workspace_atproto_did",
       "args": "p_slug text, p_domain text",
       "def": "CREATE OR REPLACE FUNCTION public.rout_workspace_atproto_did(p_slug text, p_domain text)\n RETURNS text\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\n  select w.bluesky_did from public.workspaces w\n   where (p_slug is not null and w.slug = lower(p_slug))\n      or (p_domain is not null and w.domain_verified_at is not null and lower(w.domain) = lower(p_domain))\n   limit 1\n$function$"
+    },
+    {
+      "schema": "public",
+      "name": "rout_workspace_claimable",
+      "args": "ws uuid",
+      "def": "CREATE OR REPLACE FUNCTION public.rout_workspace_claimable(ws uuid)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\n  select exists (select 1 from public.workspaces w where w.id = ws and w.created_at >= pg_catalog.now() - interval '10 minutes')\n     and not exists (select 1 from public.workspace_members m where m.workspace_id = ws)\n$function$"
     },
     {
       "schema": "public",
