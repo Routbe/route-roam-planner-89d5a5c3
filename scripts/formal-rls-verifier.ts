@@ -530,8 +530,8 @@ export class Verifier {
           const s = new Z.Solver();
           for (const f of enc.facts) s.add(f);
           for (const f of enc.literalFacts()) s.add(f);
-          s.add(Z.Not(enc.admin));
-          s.add(Z.Not(enc.purgeActive));
+          s.add(enc.Z.Not(enc.admin));
+          s.add(enc.Z.Not(enc.purgeActive));
           // H must be satisfiable on its own, or UNSAT below would prove nothing.
           if ((await s.check()) !== "sat") { push({ status: "unproven", why: "unsupported", detail: "tenant hypothesis is unsatisfiable (vacuous)" }); continue; }
           s.add(goal);
