@@ -195,13 +195,18 @@ describe("multi-tenant attacks on a replay of db/ (PGlite)", () => {
   });
 
   it("forged rows are refused: Bob as owner, Bob's parent rows, joining Bob's workspace, handing a row to Bob", async () => {
-    const refuse = async (q: string, p: unknown[]) => expect(as(A, q, p)).rejects.toThrow(/row-level security|permission denied/);
+    const passed: string[] = [];
+    const refuse = async (q: string, p: unknown[]) => {
+      const r = await as(A, q, p).then(() => "accepted", (e: Error) => (/row-level security|permission denied/.test(e.message) ? "refused" : e.message));
+      if (r !== "refused") passed.push(`${q} → ${r}`);
+    };
     await refuse(`insert into public.guestbook_entries (owner_id, author_id, body) values ($1, $1, 'x')`, [B]);
     await refuse(`insert into public.feedback_responses (form_id, comment) values ($1, 'x')`, [ids.bobForm]);
     await refuse(`insert into public.calendar_events (calendar_id, provider_id, start_utc, end_utc) values ($1, $2, now(), now() + interval '1 hour')`, [ids.bobCal, "c".repeat(64)]);
     await refuse(`insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')`, [ids.bobWs, A]);
     await refuse(`update public.guestbook_entries set owner_id = $1 where id = $2`, [B, ids.aliceGuest]);
     await refuse(`update public.connected_calendars set user_id = $1 where id = $2`, [B, ids.aliceCal]);
+    expect(passed).toEqual([]);
   });
 
   it("vault_enclave cannot be reached or reopened from rout_app", async () => {
@@ -222,7 +227,10 @@ describe("multi-tenant attacks on a replay of db/ (PGlite)", () => {
       "create function vault_enclave.x() returns int language sql as 'select 1'",
       "create table vault_enclave.x (id int)",
       "alter default privileges in schema vault_enclave grant select on tables to rout_app",
-    ]) await expect(as(A, q), q).rejects.toThrow();
+    ]) {
+      const r = await as(A, q).then(() => "accepted", () => "refused");
+      expect(`${q} → ${r}`).toBe(`${q} → refused`);
+    }
     const acl = await db.query<{ n: number }>(`select count(*)::int as n from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace where n.nspname = 'vault_enclave' and array_to_string(d.defaclacl, ',') like '%rout_app%'`);
     expect(acl.rows[0]!.n).toBe(0);
   });
