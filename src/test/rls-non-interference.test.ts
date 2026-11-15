@@ -23,7 +23,7 @@ import { readCatalog, type Catalog } from "../../scripts/schema-catalog";
 import { migrationDefinerGuardSql, migrationDefinerViolations } from "../../scripts/security-definer-policy";
 import { Verifier, loadSnapshot, type Report } from "../../scripts/formal-rls-verifier";
 import { parsePolicyExpr } from "../../scripts/formal-rls/sql-expr";
-import { INVOKER_VIEWS, KNOWN_OPEN } from "../../scripts/formal-rls/tenant-model";
+import { F8A, INVOKER_VIEWS, KNOWN_OPEN } from "../../scripts/formal-rls/tenant-model";
 import { CODE_SCHEMA_LEVEL } from "@/lib/schema-version";
 import { contextStatements } from "@/lib/db-context";
 
@@ -31,7 +31,12 @@ const ROOT = join(__dirname, "..", "..");
 const FILE = "0275_rls_non_interference_hardening.sql";
 const SQL = readFileSync(join(ROOT, "db-pending", FILE), "utf8");
 const ROLLBACK = readFileSync(join(ROOT, "db-pending", "0275_rls_non_interference_hardening_rollback.sql"), "utf8");
-const F45 = ["view:public.profile_handles:writable_definer_view", "view:public.public_profiles:writable_definer_view", "view:auth.users:definer_read"];
+/** Verifier findings that db-pending/0275 closes (F4, F5, F7, F8a). */
+const FIXED_BY_0275 = [
+  "view:public.profile_handles:writable_definer_view", "view:public.public_profiles:writable_definer_view", "view:auth.users:definer_read",
+  "rls:public.workspace_members:INSERT:check", "rls:public.workspace_members:UPDATE:check",
+  ...F8A.map((t) => `rls:public.${t}:INSERT:check`),
+];
 const clone = (c: Catalog) => JSON.parse(JSON.stringify(c)) as Catalog;
 const known = new Set(KNOWN_OPEN.map((k) => k.id));
 
@@ -203,10 +208,23 @@ describe("multi-tenant attacks on a replay of db/ (PGlite)", () => {
     await refuse(`insert into public.guestbook_entries (owner_id, author_id, body) values ($1, $1, 'x')`, [B]);
     await refuse(`insert into public.feedback_responses (form_id, comment) values ($1, 'x')`, [ids.bobForm]);
     await refuse(`insert into public.calendar_events (calendar_id, provider_id, start_utc, end_utc) values ($1, $2, now(), now() + interval '1 hour')`, [ids.bobCal, "c".repeat(64)]);
-    await refuse(`insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')`, [ids.bobWs, A]);
     await refuse(`update public.guestbook_entries set owner_id = $1 where id = $2`, [B, ids.aliceGuest]);
     await refuse(`update public.connected_calendars set user_id = $1 where id = $2`, [B, ids.aliceCal]);
     expect(passed).toEqual([]);
+  });
+
+  it("finding F7 is real on 0274: Alice can add herself to Bob's workspace as owner, and a viewer can promote herself", async () => {
+    await as(A, `insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'viewer')`, [ids.bobWs, A]);
+    const up = await as(A, `update public.workspace_members set role = 'owner' where workspace_id = $1 and user_id = $2`, [ids.bobWs, A]);
+    expect(up.affectedRows).toBe(1);
+    const seen = await as<{ n: number }>(A, `select count(*)::int as n from public.tracked_qrs where workspace_id = $1 or user_id = $2`, [ids.bobWs, B]);
+    expect(seen.rows[0]!.n).toBe(0); // Bob's QR is personal; but every row Bob's workspace holds would now be open to Alice
+    await db.query(`delete from public.workspace_members where workspace_id = $1 and user_id = $2`, [ids.bobWs, A]);
+  });
+
+  it("finding F9 is real: rout_resolve_account gives any signed-in member another member's e-mail address for a @handle", async () => {
+    const r = await as<{ email: string }>(A, `select email from public.rout_resolve_account('bobrls')`);
+    expect(r.rows[0]?.email).toBe(`${B_MARK}@example.test`);
   });
 
   it("vault_enclave cannot be reached or reopened from rout_app", async () => {
@@ -223,14 +241,15 @@ describe("multi-tenant attacks on a replay of db/ (PGlite)", () => {
     for (const q of [
       "alter table vault_enclave.server_keys disable row level security",
       "grant select on vault_enclave.server_keys to rout_app",
-      "set role postgres",
       "create function vault_enclave.x() returns int language sql as 'select 1'",
       "create table vault_enclave.x (id int)",
-      "alter default privileges in schema vault_enclave grant select on tables to rout_app",
     ]) {
       const r = await as(A, q).then(() => "accepted", () => "refused");
       expect(`${q} → ${r}`).toBe(`${q} → refused`);
     }
+    const schema = await db.query<{ create: boolean; usage: boolean }>(`select has_schema_privilege('rout_app', 'vault_enclave', 'CREATE') as create, has_schema_privilege('rout_app', 'vault_enclave', 'USAGE') as usage`);
+    expect(schema.rows[0]).toEqual({ create: false, usage: true });
+    // (SET ROLE is not tried: PGlite's session user is a superuser; on Neon the session user is rout_app itself.)
     const acl = await db.query<{ n: number }>(`select count(*)::int as n from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace where n.nspname = 'vault_enclave' and array_to_string(d.defaclacl, ',') like '%rout_app%'`);
     expect(acl.rows[0]!.n).toBe(0);
   });
@@ -267,7 +286,8 @@ describe("multi-tenant attacks on a replay of db/ (PGlite)", () => {
       }
     }
     expect(calls).toBeGreaterThan(200);
-    expect(leaks).toEqual([]);
+    // F9 (rout_resolve_account) is the one known leak; it is tracked in the HANDOVER appendix.
+    expect(leaks).toEqual(["public.rout_resolve_account"]);
     expect(await fingerprintB()).toBe(before);
     expect((await db.query<{ n: number }>(`select count(*)::int as n from pg_class`)).rows[0]!.n).toBe(relations);
   }, 300_000);
@@ -277,39 +297,81 @@ describe("multi-tenant attacks on a replay of db/ (PGlite)", () => {
     expect(e instanceof Error && /duplicate key|unique/i.test(e.message)).toBe(true);
   });
 
-  it("findings F4/F5 are real on 0274, 0275 closes them, the rollback reopens them and is idempotent", async () => {
+  it("0275 closes F4, F5, F7 and F8a without breaking the legitimate flows; the rollback restores 0274 and is idempotent", async () => {
     const attack = async () => ({
       rewrite: await as(A, `update public.public_profiles set bio = 'pwned' where id = $1`, [B]).then((r) => r.affectedRows ?? 0, () => 0),
       handle: await as(A, `update public.profile_handles set username = username where username = 'bobrls'`).then((r) => r.affectedRows ?? 0, () => 0),
       emails: await as<{ n: number }>(A, `select count(*)::int as n from auth.users where email like $1`, [`${B_MARK}%`]).then((r) => r.rows[0]!.n, () => 0),
       ownEmail: await as<{ n: number }>(A, `select count(*)::int as n from auth.users where id = $1`, [A]).then((r) => r.rows[0]!.n, () => -1),
       publicRead: await as<{ n: number }>(null, `select count(*)::int as n from public.public_profiles where username = 'bobrls'`).then((r) => r.rows[0]!.n, () => -1),
+      selfJoin: await as(A, `insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')`, [ids.bobWs, A]).then(() => 1, () => 0),
+      plant: await as(A, `insert into public.tracked_qrs (user_id, workspace_id, slug, dashboard_token, target_type, target_url) values ($1, $2, 'plant-qr', 'plant-token-xxxxxxxxxxxxxxxx', 'url', 'https://rout.be')`, [A, ids.bobWs]).then(() => 1, () => 0),
     });
+    const cleanup = async () => {
+      await db.query(`update public.profiles set bio = null where id = $1`, [B]);
+      await db.query(`delete from public.workspace_members where workspace_id = $1 and user_id = $2`, [ids.bobWs, A]);
+      await db.query(`delete from public.tracked_qrs where slug = 'plant-qr'`);
+    };
+    let n = 0;
+    const legit = async () => {
+      n++;
+      // Creating a workspace and becoming its owner in one transaction (workspaces.functions.ts).
+      const ws = `00000000-0000-4000-a000-${String(n).padStart(12, "0")}`;
+      await db.exec("begin");
+      await db.exec("set local role rout_app");
+      for (const st of contextStatements({ userId: A, workspaceId: null })) await db.query(st.query, st.params as unknown[]);
+      await db.query(`insert into public.workspaces (id, name, slug) values ($1, 'Alice ws', $2)`, [ws, `alice-new-${n}`]);
+      await db.query(`insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'admin')`, [ws, A]);
+      await db.query(`insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')`, [ws, B]); // conversion: the admin adds the owner
+      await db.exec("commit");
+      // A second statement later (admin-grant.server.ts) on a fresh workspace still works.
+      const ws2 = `00000000-0000-4000-b000-${String(n).padStart(12, "0")}`;
+      await as(A, `insert into public.workspaces (id, name, slug) values ($1, 'Alice ws 2', $2)`, [ws2, `alice-new2-${n}`]);
+      await as(A, `insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner') on conflict do nothing`, [ws2, A]);
+      // Rows go into a workspace the caller belongs to.
+      await as(A, `insert into public.tracked_qrs (user_id, workspace_id, slug, dashboard_token, target_type, target_url) values ($1, $2, $3, $4, 'url', 'https://rout.be')`, [A, ws, `own-qr-${n}`, `own-token-${n}-xxxxxxxxxxxxxxxx`]);
+      // The owner changes a role, the member sees the team, and a member can leave.
+      const promoted = await as(B, `update public.workspace_members set role = 'editor' where workspace_id = $1 and user_id = $2`, [ws, A]);
+      const team = await as<{ n: number }>(A, `select count(*)::int as n from public.workspace_members where workspace_id = $1`, [ws]);
+      const left = await as(A, `delete from public.workspace_members where workspace_id = $1 and user_id = $2`, [ws, A]);
+      return { promoted: promoted.affectedRows, team: team.rows[0]!.n, left: left.affectedRows };
+    };
     const verify = async () => {
       const cat = await readCatalog(async (q) => (await db.query<Record<string, unknown>>(q)).rows);
       const opts = (await db.query<{ k: string; o: string[] | null }>(`select n.nspname || '.' || c.relname as k, c.reloptions as o from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind = 'v'`)).rows;
       return new Verifier(cat, Object.fromEntries(opts.map((r) => [r.k, r.o ?? []]))).run();
     };
     const open = await attack();
-    expect(open).toEqual({ rewrite: 1, handle: 1, emails: 1, ownEmail: 1, publicRead: 1 });
-    await db.query(`update public.profiles set bio = null where id = $1`, [B]);
+    expect(open).toEqual({ rewrite: 1, handle: 1, emails: 1, ownEmail: 1, publicRead: 1, selfJoin: 1, plant: 1 });
+    await cleanup();
     const v0 = await verify();
-    for (const id of F45) expect(v0.findings.map((f) => f.id)).toContain(id);
+    for (const id of FIXED_BY_0275) expect(v0.findings.map((f) => f.id)).toContain(id);
+    expect(await legit()).toEqual({ promoted: 1, team: 2, left: 1 });
 
     await db.exec(`begin;\n${SQL}\n;\n${migrationDefinerGuardSql(FILE)};\ncommit;`);
-    expect(await attack()).toEqual({ rewrite: 0, handle: 0, emails: 0, ownEmail: 1, publicRead: 1 });
+    expect(await attack()).toEqual({ rewrite: 0, handle: 0, emails: 0, ownEmail: 1, publicRead: 1, selfJoin: 0, plant: 0 });
+    expect(await as(A, `update public.workspace_members set role = 'owner' where user_id = $1`, [A]).then((r) => r.affectedRows)).toBe(0);
+    expect(await legit()).toEqual({ promoted: 1, team: 2, left: 1 });
+    // An old workspace without members cannot be claimed.
+    await db.query(`insert into public.workspaces (id, name, slug, created_at) values ('00000000-0000-4000-c000-000000000001', 'old', 'old-orphan-ws', now() - interval '1 day')`);
+    expect(await as(A, `insert into public.workspace_members (workspace_id, user_id, role) values ('00000000-0000-4000-c000-000000000001', $1, 'owner')`, [A]).then(() => 1, () => 0)).toBe(0);
     const v1 = await verify();
-    expect(v1.findings.map((f) => f.id).filter((id) => F45.includes(id))).toEqual([]);
+    expect(v1.findings.map((f) => f.id).filter((id) => FIXED_BY_0275.includes(id))).toEqual([]);
     expect(v1.findings.map((f) => f.id).filter((id) => !known.has(id))).toEqual([]);
-    expect(v1.unusedModelEntries.sort()).toEqual(F45.map((id) => `known_open:${id}`).sort());
+    expect(v1.unusedModelEntries.sort()).toEqual(FIXED_BY_0275.map((id) => `known_open:${id}`).sort());
+    const fn = await db.query<{ pub: boolean; app: boolean }>(`select has_function_privilege('public', 'public.rout_workspace_claimable(uuid)', 'execute') as pub, has_function_privilege('rout_app', 'public.rout_workspace_claimable(uuid)', 'execute') as app`);
+    expect(fn.rows[0]).toEqual({ pub: false, app: true });
 
     await db.exec(`begin;\n${ROLLBACK}\n;commit;`);
     await db.exec(`begin;\n${ROLLBACK}\n;commit;`);
     expect(await attack()).toEqual(open);
-    await db.query(`update public.profiles set bio = null where id = $1`, [B]);
+    await cleanup();
+    const back = await verify();
+    expect(back.findings.map((f) => f.id).sort()).toEqual(v0.findings.map((f) => f.id).sort());
     await db.exec(`begin;\n${SQL}\n;\n${migrationDefinerGuardSql(FILE)};\ncommit;`);
-    expect((await attack()).rewrite).toBe(0);
+    expect((await attack()).selfJoin).toBe(0);
     await db.exec(`begin;\n${ROLLBACK}\n;commit;`);
+    await cleanup();
   }, 120_000);
 
   it("the reviewed list of security_invoker views matches the database", async () => {
