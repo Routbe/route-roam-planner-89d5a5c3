@@ -6,7 +6,7 @@ import { pqSessions } from "./pq-ratchet";
 import { pqSessionVault } from "./pq-session-vault";
 import { fromB64u, b64u } from "@/lib/anon-booking/zkp-anchor";
 import { assertOver } from "@/test/webauthn-test-authenticator";
-import { enclaveCode as code, enclaveOp as op, MDS3_OK, RP, signedPrekey } from "@/test/prekey-test-helpers";
+import { enclaveCode as code, enclaveOp as op, MDS3_OK, RP, signedPrekey , useEnclave } from "@/test/prekey-test-helpers";
 import { publishPrekey, readPrekeyDocument, prekeyObjectKey } from "@/lib/pq/prekey-publish.server";
 
 const A = "00000000-0000-4000-8000-00000000a801";
@@ -16,6 +16,8 @@ const dec = new TextDecoder();
 const seed = (x: number) => new Uint8Array(32).fill(x);
 const send = async (u: string, id: string, t: string) => (await op<{ envelope: Uint8Array }>("pq_ratchet.ratchet_encrypt", { userId: u, sessionId: id, plaintext: enc.encode(t) })).envelope;
 const recv = async (u: string, id: string, e: Uint8Array) => dec.decode((await op<{ plaintext: Uint8Array }>("pq_ratchet.ratchet_decrypt", { userId: u, sessionId: id, envelope: e.slice() })).plaintext);
+
+useEnclave(runEnclaveOp);
 
 afterEach(async () => {
   await runEnclaveOp("secure.wipe" as never, {} as never);

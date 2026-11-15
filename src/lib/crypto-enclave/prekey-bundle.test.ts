@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runEnclaveOp } from "./enclave-core";
 import { b64u, fromB64u } from "@/lib/anon-booking/zkp-anchor";
 import { decodePrekeyBundle, prekeyChallenge, prekeyContext, prekeyStatement, verifyPrekeyDocument, PREKEY_BUNDLE_BYTES, PREKEY_MAX_AGE_EPOCHS } from "./prekey-bundle";
-import { MDS3_OK, RP, signedPrekey } from "@/test/prekey-test-helpers";
+import { MDS3_OK, RP, signedPrekey , useEnclave } from "@/test/prekey-test-helpers";
 import { sha256 } from "@noble/hashes/sha2.js";
 
 const B = "00000000-0000-4000-8000-00000000b801";
 const DAY = 86_400_000;
 const expect_ = (now?: number) => ({ ...RP, handle: "bob", now });
+
+useEnclave(runEnclaveOp);
 
 afterEach(async () => {
   await runEnclaveOp("secure.wipe" as never, {} as never);

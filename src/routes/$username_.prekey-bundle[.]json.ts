@@ -28,7 +28,7 @@ export const Route = createFileRoute("/$username_/prekey-bundle.json")({
           const r = await readPrekeyDocument(await productionReadDeps(), String(params.username ?? ""));
           if (r.status === "invalid_handle") return json(400, JSON.stringify({ error: "invalid_handle" }), "no-store");
           if (r.status === "not_found") return json(404, JSON.stringify({ error: "not_available" }), "public, max-age=60");
-          return json(200, r.body as BodyInit, "public, max-age=300");
+          return json(200, r.status === "ok" ? (r.body as BodyInit) : "", "public, max-age=300");
         } catch {
           return json(503, JSON.stringify({ error: "unavailable" }), "no-store");
         }

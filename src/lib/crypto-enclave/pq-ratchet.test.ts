@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runEnclaveOp } from "./enclave-core";
 import { isRve2Message, pqSessions, PQR_BUNDLE_BYTES, PQR_ENVELOPE_OVERHEAD, PQR_MAX_PLAINTEXT, PQR_STATE_BYTES } from "./pq-ratchet";
 import { lastZkMemoryForTest } from "./zk-engine";
-import { RP, signedPrekey } from "@/test/prekey-test-helpers";
+import { RP, signedPrekey , useEnclave } from "@/test/prekey-test-helpers";
 
 const A = "00000000-0000-4000-8000-00000000a008";
 const B = "00000000-0000-4000-8000-00000000b008";
@@ -38,6 +38,8 @@ async function session() {
     dec.decode((await op<{ plaintext: Uint8Array }>("pq_ratchet.ratchet_decrypt", { userId: to, sessionId: id, envelope: envelope.slice() })).plaintext);
   return { bob, alice, send, recv };
 }
+
+useEnclave(runEnclaveOp);
 
 afterEach(async () => {
   await runEnclaveOp("secure.wipe" as never, {});
