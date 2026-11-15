@@ -12,6 +12,7 @@ drop index if exists public.workspace_invites_open_member_idx;
 alter table public.workspace_invites drop constraint if exists workspace_invites_target_check;
 alter table public.workspace_invites alter column email set not null;
 
+drop function if exists public.rout_transfer_owner_address(uuid);
 drop function if exists public.rout_resolve_member(text);
 drop function if exists public.rout_forwarding_token_lookup(text);
 drop function if exists public.rout_profile_notify_address(uuid, text);

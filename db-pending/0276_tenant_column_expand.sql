@@ -200,15 +200,36 @@ alter table public.workspace_invites add constraint workspace_invites_target_che
 create unique index workspace_invites_open_member_idx on public.workspace_invites (workspace_id, invited_user_id)
   where status = 'pending' and invited_user_id is not null;
 
+-- F9 (EXPAND): a workspace transfer addressed by @handle stores that label, not the address; the
+-- owner invitation is mailed to the account's address, which only the transfer's own source gets,
+-- and only after confirming its own e-mail code, while the transfer is open.
+create function public.rout_transfer_owner_address(p_transfer uuid)
+ returns text
+ language sql
+ stable security definer
+ set search_path = pg_catalog, pg_temp
+as $function$
+  select u.email
+    from public.workspace_transfers t
+    join public.users u on u.id = t.target_user_id
+   where t.id = p_transfer
+     and t.source_user_id = public.rout_current_user_id()
+     and t.otp_verified_at is not null
+     and t.status in ('pending', 'otp_ok')
+     and t.expires_at > pg_catalog.now()
+$function$;
+
 revoke all on function public.rout_profile_private_mine() from public, rout_app;
 revoke all on function public.rout_profile_export_mine() from public, rout_app;
 revoke all on function public.rout_admin_profiles_private() from public, rout_app;
 revoke all on function public.rout_profile_notify_address(uuid, text) from public, rout_app;
 revoke all on function public.rout_forwarding_token_lookup(text) from public, rout_app;
 revoke all on function public.rout_resolve_member(text) from public, rout_app;
+revoke all on function public.rout_transfer_owner_address(uuid) from public, rout_app;
 grant execute on function public.rout_profile_private_mine() to rout_app;
 grant execute on function public.rout_profile_export_mine() to rout_app;
 grant execute on function public.rout_admin_profiles_private() to rout_app;
 grant execute on function public.rout_profile_notify_address(uuid, text) to rout_app;
 grant execute on function public.rout_forwarding_token_lookup(text) to rout_app;
 grant execute on function public.rout_resolve_member(text) to rout_app;
+grant execute on function public.rout_transfer_owner_address(uuid) to rout_app;

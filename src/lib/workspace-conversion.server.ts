@@ -85,7 +85,13 @@ export async function startConversion(
   const raw = input.target.trim();
   const isEmail = raw.includes("@") && !raw.startsWith("@");
   // Owner by e-mail or @username; accounts are looked up through a narrow server-only helper.
-  const found = (await sql`select user_id as id, email from public.rout_resolve_account(${raw})`) as { id: string; email: string }[];
+  // From db-pending/0276 on, a @username owner is stored by id and its label, never by address.
+  const { hasSchemaFeature } = await import("@/lib/schema-features.server");
+  const memberOnly = await hasSchemaFeature("0276");
+  const found = memberOnly
+    ? ((await sql`select user_id as id, username from public.rout_resolve_member(${raw})`) as { id: string; username: string | null }[])
+        .map((r) => ({ id: r.id, email: isEmail ? raw.toLowerCase() : `@${r.username ?? raw.replace(/^@/, "")}` }))
+    : ((await sql`select user_id as id, email from public.rout_resolve_account(${raw})`) as { id: string; email: string }[]);
   const target = found[0] ?? null;
   if (!isEmail && !target) return { ok: false as const, reason: "unknown_user" as const };
   const err = checkTarget(user.id, user.email, { userId: target?.id ?? null, email: target?.email ?? raw });
@@ -119,9 +125,16 @@ async function sendOwnerInvite(t: TransferRow, request: Request | null) {
   const updated = (await sql`update public.workspace_transfers set token_hash = ${await hashToken(token)}
     where id = ${t.id} and source_user_id = ${t.source_user_id} and otp_verified_at is not null returning id`) as unknown[];
   if (!updated.length) return;
+  // A @handle transfer stores the label; the address comes from the source-only definer at send time.
+  let to = t.target_email.toLowerCase();
+  if (to.startsWith("@")) {
+    const r = (await sql`select public.rout_transfer_owner_address(${t.id}::uuid) as email`) as { email: string | null }[];
+    if (!r[0]?.email) return;
+    to = r[0].email.toLowerCase();
+  }
   const { sendLocalizedEmail, localeFromRequest } = await import("@/lib/email.server");
   void sendLocalizedEmail({
-    to: t.target_email.toLowerCase(),
+    to,
     intent: "workspace-owner-invite",
     locale: localeFromRequest(request),
     payload: { link: `${siteUrl()}/workspace-transfer/${token}`, name: t.workspace_name },
