@@ -210,7 +210,7 @@ async function maybeExecute(transferId: string): Promise<{ completed: boolean; w
   const live = withSlug(design.live);
   const concept = withSlug(design.concept);
   const logo = conversionWorkspaceLogo(design.live);
-  const { resolveInvites } = await import("./workspaces.server");
+  const { resolveInvites, inviteInsertQuery } = await import("./workspaces.server");
   const invites = (await resolveInvites(details.invites, src).catch((): Awaited<ReturnType<typeof resolveInvites>> => [])).filter((i) => i.userId !== t.target_user_id);
 
   // One transaction: if any statement fails, nothing changes.
@@ -234,9 +234,7 @@ async function maybeExecute(transferId: string): Promise<{ completed: boolean; w
     sql`insert into public.workspace_members (workspace_id, user_id, role) values (${ws}::uuid, ${src}, ${SUNSET_MEMBER_ROLE})`,
     sql`insert into public.workspace_members (workspace_id, user_id, role)
         select ${ws}::uuid, target_user_id, 'owner' from public.workspace_transfers where id = ${t.id}`,
-    ...invites.map((i) => sql`insert into public.workspace_invites (workspace_id, email, role, invited_by, invited_user_id)
-        values (${ws}::uuid, ${i.email}, ${i.role}::public.workspace_role, ${src}, ${i.userId}::uuid)
-        on conflict (workspace_id, lower(email)) where status = 'pending' do nothing`),
+    ...invites.map((i) => inviteInsertQuery(ws, i, src, "nothing")),
     // Design: the verified profile's design goes live, the other stays an unpublished concept.
     ...(concept ? [sql`insert into public.workspace_profile_drafts (workspace_id, payload, revision, published_revision, updated_by, published_at)
         values (${ws}::uuid, ${concept}::jsonb, ${live && live !== concept ? 2 : 1}, ${live ? (live !== concept ? 1 : 1) : 0}, ${src}, ${live ? new Date().toISOString() : null}::timestamptz)

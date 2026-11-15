@@ -116,7 +116,7 @@ export const createWorkspace = createServerFn({ method: "POST" })
       if (!(await slugTaken(candidate))) slug = candidate;
     }
     if (!slug) throw new Error("Geen vrij workspace-adres gevonden. Kies een andere naam.");
-    const { resolveInvites } = await import("./workspaces.server");
+    const { resolveInvites, inviteInsertQuery } = await import("./workspaces.server");
     const resolved = await resolveInvites(invites, context.userId);
     const id = crypto.randomUUID();
     // Eén transactie: workspace, eigenaar en uitnodigingen bestaan samen of niet.
@@ -124,9 +124,7 @@ export const createWorkspace = createServerFn({ method: "POST" })
       sql`insert into public.workspaces (id, name, slug, description, category, icon, avatar_url)
           values (${id}::uuid, ${data.name}, ${slug}, ${data.description || null}, ${data.category ?? null}, ${data.icon ?? null}, ${data.avatarUrl ?? null})`,
       sql`insert into public.workspace_members (workspace_id, user_id, role) values (${id}::uuid, ${context.userId}, 'owner')`,
-      ...resolved.map((i) => sql`insert into public.workspace_invites (workspace_id, email, role, invited_by, invited_user_id)
-          values (${id}::uuid, ${i.email}, ${i.role}::public.workspace_role, ${context.userId}, ${i.userId}::uuid)
-          on conflict (workspace_id, lower(email)) where status = 'pending' do nothing`),
+      ...resolved.map((i) => inviteInsertQuery(id, i, context.userId, "nothing")),
     ]);
     await setActiveWorkspaceCookie(id);
     // Billing intent is validated, never trusted as proof of payment.
@@ -206,17 +204,12 @@ export const inviteMember = createServerFn({ method: "POST" })
     const { assertWorkspaceRole } = await import("./workspaces.server");
     const actor = await assertWorkspaceRole(context.userId, data.workspaceId, ["owner", "admin"]);
     if (!canManageTeam(actor) || !canAssignRole(actor, data.role)) throw new Error("Alleen een eigenaar kan iemand eigenaar maken.");
-    const { resolveInvites } = await import("./workspaces.server");
+    const { resolveInvites, inviteInsertQuery } = await import("./workspaces.server");
     const [invite] = await resolveInvites([{ target: data.target, role: data.role }], context.userId);
     if (!invite) throw new Error("Je bent zelf al lid van deze workspace.");
     const team = (await sql`select user_id, email from public.rout_workspace_team(${data.workspaceId}::uuid)`) as { user_id: string; email: string | null }[];
-    if (team.some((m) => (invite.userId && m.user_id === invite.userId) || m.email?.toLowerCase() === invite.email)) throw new Error("Deze persoon is al lid.");
-    await sql`
-      insert into public.workspace_invites (workspace_id, email, role, invited_by, invited_user_id)
-      values (${data.workspaceId}, ${invite.email}, ${data.role}::public.workspace_role, ${context.userId}, ${invite.userId}::uuid)
-      on conflict (workspace_id, lower(email)) where status = 'pending'
-      do update set role = excluded.role, invited_by = excluded.invited_by, invited_user_id = excluded.invited_user_id
-    `;
+    if (team.some((m) => (invite.userId && m.user_id === invite.userId) || (invite.email !== null && m.email?.toLowerCase() === invite.email))) throw new Error("Deze persoon is al lid.");
+    await inviteInsertQuery(data.workspaceId, { ...invite, role: data.role }, context.userId, "update");
     return { ok: true as const, label: invite.label };
   });
 
