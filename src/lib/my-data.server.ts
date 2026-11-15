@@ -22,12 +22,11 @@ const safe = async (run: () => Promise<Row[]>): Promise<Row[]> => {
 
 export async function exportMyData(userId: string) {
   const [profile, saved, tracked, badges, links, socials, aliases, domains] = await Promise.all([
-    safe(
-      () =>
-        sql`select * from public.profiles where id = ${userId} limit 1` as unknown as Promise<
-          Row[]
-        >,
-    ),
+    safe(async () => {
+      const { exportMyProfileRow } = await import("@/lib/profile-private.server");
+      const row = await exportMyProfileRow(userId);
+      return (row ? [row] : []) as Row[];
+    }),
     safe(
       () =>
         sql`select * from public.saved_qrs where user_id = ${userId}` as unknown as Promise<Row[]>,

@@ -85,12 +85,13 @@ async function removeAlias(domain: AppDomain, handle: string): Promise<void> {
 
 async function readProfile(userId: string) {
   const rows = (await sql`
-    select username, verified, is_early_believer, is_paid, forwarding_email, forwarding_email_verified
+    select username, verified, is_early_believer, is_paid, forwarding_email_verified
       from public.profiles
      where id = ${userId}
      limit 1
   `) as Row[];
-  const profile = rows[0];
+  const { readMyPrivateProfile } = await import("@/lib/profile-private.server");
+  const profile = rows[0] ? { ...rows[0], forwarding_email: (await readMyPrivateProfile(userId))?.forwarding_email ?? null } : undefined;
   const eligible = Boolean(
     profile?.["verified"] || profile?.["is_early_believer"] || profile?.["is_paid"],
   );

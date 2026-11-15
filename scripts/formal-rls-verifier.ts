@@ -150,7 +150,17 @@ class Encoder {
    * (INSERT / UPDATE WITH CHECK) also count a row that names the caller but places
    * it in a workspace someone else holds: writing into a foreign workspace interferes too.
    */
-  otherTenant(row: Row, requireReference: boolean, opts: { excludeOwnKey?: boolean; write?: boolean } = {}) {
+  /** The row an UPDATE writes, while its WITH CHECK is encoded (rout_tenant_ref_kept reads its pre-image). */
+  keptRow: Row | null = null;
+  private readonly keptVars = new Map<string, any>();
+  /** "The pre-image of this row holds the same value in tenant column c" (pinned rout_tenant_ref_kept). */
+  kept(row: Row, c: string) {
+    const k = `${row.tag}.${c}`;
+    let x = this.keptVars.get(k);
+    if (!x) { x = this.Z.Bool.const(`${k}.kept`); this.keptVars.set(k, x); }
+    return x;
+  }
+  otherTenant(row: Row, requireReference: boolean, opts: { excludeOwnKey?: boolean; write?: boolean; update?: boolean } = {}) {
     const Z = this.Z;
     const { identity, workspace, handle } = tenantColumns(row.table);
     const refs: any[] = [], read: any[] = [], foreignWs: any[] = [];
@@ -163,7 +173,8 @@ class Encoder {
     for (const c of workspace) {
       const t = this.column(row, c) as V;
       read.push(Z.Not(Z.And(t.n, this.member(t.v))));
-      if (!(opts.excludeOwnKey && c === "id")) { refs.push(t.n); foreignWs.push(Z.And(t.n, Z.Not(this.member(t.v)), this.hasMember(t.v))); }
+      // An UPDATE that keeps the reference creates no new cross-tenant link: only a move counts.
+      if (!(opts.excludeOwnKey && c === "id")) { refs.push(t.n); foreignWs.push(Z.And(t.n, Z.Not(this.member(t.v)), this.hasMember(t.v), ...(opts.update ? [Z.Not(this.kept(row, c))] : []))); }
     }
     for (const c of handle) {
       const t = this.column(row, c) as V;
@@ -369,6 +380,18 @@ class Encoder {
       const t = Z.And(w.n, c);
       return T(t, Z.Not(t), w.exact);
     }
+    if (e.name === "rout_tenant_ref_kept" && e.args.length === 3 && this.keptRow && this.verifier.pinned(e.name)) {
+      // Pinned body: true iff the row with this id (the primary key) already holds this value in that
+      // column. Inside an UPDATE's WITH CHECK the statement still reads the pre-image.
+      const row = this.keptRow;
+      const a0 = e.args[0]!.k === "cast" ? (e.args[0] as Extract<Expr, { k: "cast" }>).e : e.args[0]!;
+      const [a1, a2] = [e.args[1]!, e.args[2]!];
+      if (a0.k === "lit" && a0.v === `s:${row.table.name}` && a1.k === "col" && a2.k === "col") {
+        const id = this.resolve(a1, sc), ref = this.resolve(a2, sc);
+        const col = [...row.cols.entries()].find(([, v]) => v === ref)?.[0];
+        if (id === this.column(row, "id") && col && col !== "id") { const k = this.kept(row, col); return T(k, Z.Not(k)); }
+      }
+    }
     if (e.name === "rout_purge_due" && e.args.length === 1) {
       const x = this.v(e.args[0]!, sc, depth);
       const t = Z.And(x.n, this.purgeActive, x.v.eq(this.purgeTarget), this.fn("deletion_due", 1, [false], "bool").call(x.v));
@@ -445,7 +468,10 @@ export class Verifier {
   private readonly lemmas = new Map<string, Sel | null>();
   private readonly parsed = new Map<string, Expr>();
   /** viewOptions: "schema.name" → pg_class.reloptions, when read from a live database; defaults to the reviewed list. */
-  constructor(readonly catalog: Catalog, private readonly viewOptions?: Record<string, string[]>) {
+  private readonly declassified: ReadonlyArray<M.Declassification>;
+  /** extra.declassified: reviewed entries for a held-back migration, tested before they move into DECLASSIFIED. */
+  constructor(readonly catalog: Catalog, private readonly viewOptions?: Record<string, string[]>, extra: { declassified?: ReadonlyArray<M.Declassification> } = {}) {
+    this.declassified = [...M.DECLASSIFIED, ...(extra.declassified ?? [])];
     for (const t of catalog.tables) if (t.schema === "public" || t.schema === "vault_enclave") this.tables.set(t.schema === "public" ? t.name : `vault_enclave.${t.name}`, t);
     for (const f of catalog.functions) {
       const m = /RETURNS\s+(SETOF\s+)?([\w ."\[\]]+?)\n/.exec(f.def);
@@ -458,7 +484,7 @@ export class Verifier {
     }
   }
   table(name: string) { return this.tables.get(name); }
-  returnsBoolean(name: string) { if (["rout_caller_is_admin", "rout_is_workspace_member", "rout_purge_due", "rout_workspace_claimable"].includes(name)) return true; return this.fnReturns.get(name) === "boolean"; }
+  returnsBoolean(name: string) { if (["rout_caller_is_admin", "rout_is_workspace_member", "rout_purge_due", "rout_workspace_claimable", "rout_tenant_ref_kept"].includes(name)) return true; return this.fnReturns.get(name) === "boolean"; }
   /** A helper with a reviewed meaning (tenant-model PINNED_FUNCTIONS) counts only while its body is unchanged. */
   pinned(name: string) {
     const want = M.PINNED_FUNCTIONS[name];
@@ -470,7 +496,20 @@ export class Verifier {
   }
   srfLemma(name: string) { const l = this.lemmas.get(name) ?? null; if (l) this.lemmaUse.add(name); return l; }
   parse(src: string) { let e = this.parsed.get(src); if (!e) { e = parsePolicyExpr(src); this.parsed.set(src, e); } return e; }
-  grant(t: Table, cmd: Cmd) { return (t.grants[APP] ?? []).includes(cmd); }
+  /** Table-level privilege, or a column-level grant of that privilege on some columns. */
+  grant(t: Table, cmd: Cmd) { return (t.grants[APP] ?? []).includes(cmd) || !!t.columnGrants?.[APP]?.[cmd]?.length; }
+  /** Whether rout_app may write column c with cmd (table-level grant, or a column-level grant naming it). */
+  writable(t: Table, cmd: "INSERT" | "UPDATE", c: string) { return (t.grants[APP] ?? []).includes(cmd) || !!t.columnGrants?.[APP]?.[cmd]?.includes(c); }
+  /** Reviewed declassifications; an entry with columns applies only while rout_app reads exactly a subset of them. */
+  declassification(t: Table, name: string, cmd: Cmd) {
+    return this.declassified.find((x) => {
+      if (x.table !== name || x.cmd !== cmd) return false;
+      if (!x.columns) return true;
+      if ((t.grants[APP] ?? []).includes("SELECT")) return false;
+      const cols = t.columnGrants?.[APP]?.["SELECT"] ?? [];
+      return cols.length > 0 && cols.every((c) => x.columns!.includes(c));
+    });
+  }
 
   /** A row of a subquery is visible to rout_app only through that table's own SELECT policy. */
   visible(enc: Encoder, row: Row, depth: number): any {
@@ -518,7 +557,11 @@ export class Verifier {
           try {
             const row = enc.newRow(t, t.name);
             (row as Row & { tenant?: boolean }).tenant = true;
-            const refs = enc.otherTenant(row, true, { excludeOwnKey: cmd === "INSERT" && M.WORKSPACE_TABLES.has(t.name), write: phase === "check" });
+            const update = cmd === "UPDATE" && phase === "check";
+            if (update) enc.keptRow = row;
+            const refs = enc.otherTenant(row, true, { excludeOwnKey: cmd === "INSERT" && M.WORKSPACE_TABLES.has(t.name), write: phase === "check", update });
+            // A tenant column rout_app may not UPDATE (column-level grants only) keeps its pre-image value.
+            if (update) for (const c of tenantColumns(t).workspace) if (!this.writable(t, "UPDATE", c)) enc.facts.push(enc.kept(row, c));
             if (phase === "using") enc.definitional(row); // a row being written does not exist yet
             if (refs === 0) enc.facts.pop(); // tenantless table: H keeps only the privilege facts below
             goal = this.effective(enc, t, cmd, phase, [row], 0);
@@ -543,7 +586,7 @@ export class Verifier {
           (s as { release?: () => void }).release?.();
           if (opts.smtOut) writeFileSync(join(opts.smtOut, `${name}.${cmd}.${phase}.smt2`), smt);
           if (r === "unsat") { push({ status: "proven", via: "smt" }); continue; }
-          const d = M.DECLASSIFIED.find((x) => x.table === name && x.cmd === cmd);
+          const d = this.declassification(t, name, cmd);
           if (d) { usedDecl.add(`${name}:${cmd}`); push({ status: "declassified", reason: d.reason }); continue; }
           push({ status: "unproven", why: "satisfiable", detail }, smt);
         }
@@ -602,6 +645,8 @@ export class Verifier {
       for (const i of t.indexes) { const m = /^CREATE UNIQUE INDEX \S+ ON \S+ USING \w+ \((.+?)\)(?: WHERE .*)?$/.exec(i); if (m) keys.push(m[1]!.split(",").map((s) => s.trim())); }
       for (const k of keys) {
         if (k.some((c) => identity.includes(c) || workspace.includes(c))) continue;
+        // A duplicate-key error needs a write that sets a key column.
+        if (!k.some((c) => this.writable(t, "INSERT", c.replace(/^lower\((.+)\)$/, "$1")) || this.writable(t, "UPDATE", c.replace(/^lower\((.+)\)$/, "$1")))) continue;
         const random = k.length === 1 && /gen_random_uuid\(\)|nextval\(/.test(t.columns.find((c) => c.name === k[0])?.default ?? "");
         if (random) continue;
         if (k.length === 1 && M.IDENTITY_COLUMN.test(k[0]!)) continue;
@@ -613,7 +658,7 @@ export class Verifier {
 
     findings.push(...oracles.filter((o) => !o.detail.startsWith("reviewed:")));
     const unusedModelEntries = [
-      ...M.DECLASSIFIED.filter((d) => !usedDecl.has(`${d.table}:${d.cmd}`)).map((d) => `declassified:${d.table}:${d.cmd}`),
+      ...this.declassified.filter((d) => !usedDecl.has(`${d.table}:${d.cmd}`)).map((d) => `declassified:${d.table}:${d.cmd}`),
       ...Object.keys(M.ORACLE_REVIEW).filter((k) => !oracleSeen.has(k)).map((k) => `oracle_review:${k}`),
       ...M.SERVICE_BOUNDARY.filter((s) => !usedService.has(`${s.schema}.${s.table}`)).map((s) => `service:${s.schema}.${s.table}`),
       ...M.KNOWN_OPEN.filter((k) => !findings.some((f) => f.id === k.id)).map((k) => `known_open:${k.id}`),

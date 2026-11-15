@@ -22,14 +22,16 @@ export interface LeadInput {
 /** Zoekt de eigenaar én het actieve contactformulier-blok van dit profiel. */
 async function ownerFor(handle: string) {
   const rows = (await sql`
-    select p.id, p.username, p.display_name, p.blocks,
-           coalesce(p.forwarding_email, p.email) as email
+    select p.id, p.username, p.display_name, p.blocks
       from public.profiles p
      where lower(p.username) = ${handle.toLowerCase()}
      limit 1
   `) as Row[];
-  const row = rows[0];
-  if (!row) return null;
+  const found = rows[0];
+  if (!found) return null;
+  // The owner's address comes from the notification definer: only for a profile with a visible contact form.
+  const { readNotifyAddress } = await import("@/lib/profile-private.server");
+  const row: Record<string, unknown> = { ...found, email: await readNotifyAddress(String(found["id"]), "contact_form") };
   const blocks = Array.isArray(row["blocks"]) ? (row["blocks"] as Row[]) : [];
   const block = blocks.find((b) => b?.["kind"] === "contact_form" && b?.["hidden"] !== true);
   if (!block) return null;

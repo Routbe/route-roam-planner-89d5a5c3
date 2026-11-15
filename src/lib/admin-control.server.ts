@@ -81,13 +81,16 @@ export async function infrastructureOverview(input: { kind: "webhooks" | "subdom
       and (${like}::text is null or subdomain_alias ilike ${like} or username ilike ${like})
       and (${input.cursor}::uuid is null or id > ${input.cursor}::uuid) order by id limit 51` as Row[];
   } else {
+    // The forwarding address is a private column: admins read it through the admin definer.
+    const { adminPrivateProfilesSource } = await import("@/lib/profile-private.server");
+    const priv = await adminPrivateProfilesSource();
     rows = await sql`with aliases as (
       select 'alias:' || a.id::text as id, a.alias, a.target_email, a.status, p.username,
         to_json(a.updated_at) as updated_at_iso from public.email_aliases a left join public.profiles p on p.id = a.user_id
       union all
-      select 'profile:' || p.id::text, p.username || '@rout.be', p.forwarding_email,
+      select 'profile:' || p.id::text, p.username || '@rout.be', pp.forwarding_email,
         coalesce(p.alias_status, 'pending'), p.username, to_json(p.updated_at)
-        from public.profiles p where p.username is not null and p.forwarding_email is not null
+        from public.profiles p join ${priv} pp on pp.id = p.id where p.username is not null and pp.forwarding_email is not null
           and coalesce(p.alias_status, 'none') <> 'none'
           and not exists (select 1 from public.email_aliases a where a.alias = p.username || '@rout.be')
     ) select * from aliases

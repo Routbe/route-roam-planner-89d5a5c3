@@ -21,17 +21,31 @@ export const IDENTITY_FUNCTIONS = new Set(["rout_current_user_id", "current_app_
  * Public by design. The proof shows these reads are satisfiable for a stranger's
  * row; that is the declassification. Read-only and listed one by one.
  */
-export const DECLASSIFIED: ReadonlyArray<{ table: string; cmd: "SELECT" | "INSERT"; reason: string }> = [
+/** columns: the declassification covers only these columns, and only while rout_app has no table-level SELECT. */
+export type Declassification = { table: string; cmd: "SELECT" | "INSERT"; reason: string; columns?: readonly string[] };
+export const DECLASSIFIED: ReadonlyArray<Declassification> = [
   { table: "public.badges", cmd: "SELECT", reason: "badge catalogue shown on every public profile; no member columns" },
   { table: "public.reserved_brands", cmd: "SELECT", reason: "reserved brand names, checked at sign-up before any identity exists" },
   { table: "public.reserved_handles", cmd: "SELECT", reason: "reserved handles, checked at sign-up before any identity exists" },
   { table: "public.showcase_profiles", cmd: "SELECT", reason: "curated public showcase on the home page; no member columns" },
   { table: "public.platform_feature_switches", cmd: "SELECT", reason: "global on/off switches the public pages read; writes need a platform admin" },
+  { table: "public.platform_integration_switches", cmd: "SELECT", reason: "global integration switches (db/0241): rout_app reads only provider and mode, no member columns", columns: ["mode", "provider"] },
   { table: "public.alias_profiles", cmd: "SELECT", reason: "only enabled alias pages, which are public profile pages by design" },
   { table: "public.custom_domains", cmd: "SELECT", reason: "only verified domains, needed to route a public host name; the TXT token is published in DNS" },
-  { table: "public.public_profiles", cmd: "SELECT", reason: "public projection of profiles with forwarding_email nulled; read-only once 0275 runs" },
-  { table: "public.profile_handles", cmd: "SELECT", reason: "usernames only, used for handle availability; read-only once 0275 runs" },
+  { table: "public.public_profiles", cmd: "SELECT", reason: "public projection of profiles with forwarding_email nulled; read-only since 0275; leaves with db-pending/0276 (security_invoker)" },
+  { table: "public.profile_handles", cmd: "SELECT", reason: "usernames only, used for handle availability; read-only since 0275; leaves with db-pending/0276 (security_invoker)" },
   { table: "public.account_deletion_audit", cmd: "INSERT", reason: "append-only, no member columns; each row carries an HMAC under the server secret, so a forged row fails verification" },
+];
+
+/** Private profile columns (db-pending/0277): only owner, admin, notification and token definers read them. */
+export const PRIVATE_PROFILE_COLUMNS = ["email", "forwarding_email", "forwarding_email_token", "forwarding_email_token_expires_at", "legal_first_name", "legal_last_name", "last_city", "last_country", "last_location_at"] as const;
+/**
+ * Reviewed entries for the held-back db-pending/0277. They move into DECLASSIFIED (and the KNOWN_OPEN
+ * entries F1/F2 leave) in the change that moves 0277 into db/; until then the pending-migration test
+ * passes them to the verifier explicitly.
+ */
+export const PENDING_0277_DECLASSIFIED: ReadonlyArray<Declassification> = [
+  { table: "public.profiles", cmd: "SELECT", reason: "public profile columns (handle, display name, design, badges, status); every private column is withheld from rout_app by column privileges", columns: ["id", "username", "display_name", "tagline", "bio", "avatar_url", "favicon_url", "theme", "card_style", "blocks", "tier", "status", "verified", "verified_at", "verified_legal_name", "is_suspended", "is_banned", "url_style", "created_at", "updated_at", "preferred_language", "business_info", "is_early_believer", "is_paid", "subdomain_enabled", "custom_domain", "bluesky_did", "redirect_target", "show_email_publicly", "forwarding_email_verified", "handle_grant", "payment_method", "moderated_at", "moderated_by", "moderation_reason", "alias_status", "alias_sync_status", "alias_sync_attempts", "alias_sync_error", "alias_synced_at", "referred_by", "referral_count", "country_code", "display_prefs", "is_admin", "subdomain_alias", "subdomain_tier", "root_subdomain_status", "bluesky_handle", "show_vcard_button", "invited_count", "verified_invites", "stripe_account_id", "stripe_account_status", "stripe_charges_enabled", "stripe_payouts_enabled", "show_total_reach", "total_reach_count", "reach_last_synced_at", "total_reach_manual", "is_business", "business_name", "business_vat", "is_influencer", "is_shadowbanned", "profile_descriptions", "workspace_id", "is_early_verified", "early_believer_at"] },
 ];
 
 /**
@@ -45,19 +59,13 @@ export const SERVICE_BOUNDARY: ReadonlyArray<{ schema: string; table: string; re
  * Open findings that are known and tracked (HANDOVER appendix Stap 9). The
  * test fails when this list and the verifier's findings differ either way.
  */
-/** Tables whose INSERT gets the 0275 workspace guard. */
+/** Tables whose INSERT carries the 0275 workspace guard (db/0275). */
 export const F8A = ["booking_event_types", "bookings", "oauth_clients", "rout_calendars", "tracked_qrs", "user_assets", "webhook_endpoints", "workspace_transfers"] as const;
 const ORACLE_OPEN = "personal or externally known identifier: a duplicate-key error tells whether another member holds it; fix by moving writes into a definer that answers uniformly";
 export const KNOWN_OPEN: ReadonlyArray<{ id: string; reason: string }> = [
   { id: "rls:public.profiles:SELECT:using", reason: "F1 rout_public_read = true exposes every profile column (email, legal names, forwarding token, location, Stripe ids) to rout_app; privacy is enforced only in server code. Needs EXPAND (public reads through public_profiles / a definer) before CONTRACT drops the policy" },
   { id: "rls:public.social_links:SELECT:using", reason: "F2 social_links_public_select = true also exposes verification_code and last_error; the owner policies key on app.current_user_id, which the app never sets" },
   { id: "rls:public.workspaces:INSERT:check", reason: "F3 rout_create only checks that a caller exists, so a new workspace may name another member in legacy_user_id; workspace conversion writes legacy_user_id for the source account, so the fix needs that path in a definer first" },
-  { id: "view:public.profile_handles:writable_definer_view", reason: "F4 fixed by db-pending/0275: INSERT/UPDATE/DELETE through an owner-rights view bypass RLS on profiles" },
-  { id: "view:public.public_profiles:writable_definer_view", reason: "F4 fixed by db-pending/0275: same as profile_handles" },
-  { id: "view:auth.users:definer_read", reason: "F5 fixed by db-pending/0275: the view reads public.users with the owner's rights, exposing every e-mail address; 0275 sets security_invoker" },
-  { id: "rls:public.workspace_members:INSERT:check", reason: "F7 fixed by db-pending/0275: rout_scope lets any member add themselves to any workspace with any role" },
-  { id: "rls:public.workspace_members:UPDATE:check", reason: "F7 fixed by db-pending/0275: rout_scope lets a member raise their own role to owner" },
-  ...F8A.map((t) => ({ id: `rls:public.${t}:INSERT:check`, reason: "F8a fixed by db-pending/0275: a member could insert their own row into a workspace they do not belong to" })),
   ...[...F8A, "users", "profiles"].map((t) => ({ id: `rls:public.${t}:UPDATE:check`, reason: "F8b open: an own row can be moved into a foreign workspace by UPDATE; needs a trigger that checks membership only when the workspace column changes" })),
   { id: "rls:public.users:INSERT:check", reason: "F8b open: migrated_to_workspace_id may name a foreign workspace on insert" },
   { id: "rls:public.profiles:INSERT:check", reason: "F8b open: workspace_id may name a foreign workspace on insert" },
@@ -109,14 +117,30 @@ export const SRF_LEMMAS: Record<string, { body: string; sql: string; bypassRls: 
  * Views created WITH (security_invoker = true). The snapshot has no view
  * options, so the replay test compares this list with pg_class.reloptions.
  */
-export const INVOKER_VIEWS: ReadonlySet<string> = new Set(["public.grid_items", "public.ingest_tokens"]);
+export const INVOKER_VIEWS: ReadonlySet<string> = new Set(["auth.users", "public.grid_items", "public.ingest_tokens"]);
 
 /**
  * Helpers whose meaning the encoder relies on, pinned to their exact body
- * (whitespace-insensitive). rout_workspace_claimable (db-pending/0275) is true
+ * (whitespace-insensitive). rout_workspace_claimable (db/0275) is true
  * only for a workspace without any member.
  */
 export const PINNED_FUNCTIONS: Readonly<Record<string, string>> = {
+  // db-pending/0276: true iff the row with that primary key already holds p_ref in the named tenant column.
+  rout_tenant_ref_kept: `
+  select case p_table
+    when 'booking_event_types' then exists (select 1 from public.booking_event_types t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'bookings' then exists (select 1 from public.bookings t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'oauth_clients' then exists (select 1 from public.oauth_clients t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'rout_calendars' then exists (select 1 from public.rout_calendars t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'tracked_qrs' then exists (select 1 from public.tracked_qrs t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'user_assets' then exists (select 1 from public.user_assets t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'webhook_endpoints' then exists (select 1 from public.webhook_endpoints t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'workspace_transfers' then exists (select 1 from public.workspace_transfers t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'profiles' then exists (select 1 from public.profiles t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'users' then exists (select 1 from public.users t where t.id = p_id and t.migrated_to_workspace_id is not distinct from p_ref)
+    when 'workspaces' then exists (select 1 from public.workspaces t where t.id = p_id and t.legacy_user_id is not distinct from p_ref)
+    else false end
+`,
   rout_workspace_claimable: `
   select exists (select 1 from public.workspaces w where w.id = ws and w.created_at >= pg_catalog.now() - interval '10 minutes')
      and not exists (select 1 from public.workspace_members m where m.workspace_id = ws)
