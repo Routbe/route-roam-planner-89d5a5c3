@@ -46,7 +46,7 @@ describe("db-pending/0276 + 0277 on a replay of db/ (PGlite)", () => {
       throw e;
     }
   };
-  const ok = (user: string | null, q: string, p: unknown[] = []) => as(user, q, p).then((r) => r.affectedRows ?? r.rows.length, (e: Error) => `refused: ${e.message.slice(0, 60)}`);
+  const ok = (user: string | null, q: string, p: unknown[] = []) => as(user, q, p).then((r) => r.affectedRows || r.rows.length, (e: Error) => `refused: ${e.message.slice(0, 60)}`);
   const apply = async (file: string, body: string) => db.exec(`begin;\n${body}\n;\n${migrationDefinerGuardSql(file)};\ncommit;`);
   const verify = async () => {
     const cat = await readCatalog(async (q) => (await db.query<Record<string, unknown>>(q)).rows);
