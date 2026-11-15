@@ -72,14 +72,18 @@ export async function listSepaReviews(options: {
   const search = options.search?.trim() ? `%${options.search.trim()}%` : null;
   const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
 
+  // Admin queue: the member's address is a private column, read through the admin definer.
+  const { adminPrivateProfilesSource } = await import("@/lib/profile-private.server");
+  const privSource = String((await adminPrivateProfilesSource()).text ?? "");
   const rows = (await sql.query(
-    `select q.*, p.email as member_email, p.display_name as member_name
+    `select q.*, pp.email as member_email, p.display_name as member_name
        from public.sepa_review_queue q
        left join public.profiles p on p.id = q.user_id
+       left join ${privSource} pp on pp.id = q.user_id
       where ($1::text = 'all' or q.status = $1::text)
         and ($2::text is null
              or q.reference ilike $2 or q.payer_name ilike $2
-             or q.holder_name ilike $2 or p.email ilike $2)
+             or q.holder_name ilike $2 or pp.email ilike $2)
       order by q.created_at desc
       limit $3`,
     [status, search, limit],

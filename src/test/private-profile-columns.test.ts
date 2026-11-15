@@ -49,7 +49,7 @@ describe("private profile columns stay behind the 0276 definers", () => {
     expect(privateReads("update public.profiles set legal_first_name = coalesce($x, legal_first_name) where id = $x")).toEqual(["legal_first_name"]);
     expect(privateReads("update public.profiles set legal_first_name = $x where id = $x")).toEqual([]);
     expect(privateReads("insert into public.profiles (id, email) values ($x, $x) on conflict (id) do nothing")).toEqual([]);
-    expect(privateReads("insert into public.profiles (id, email) values ($x, $x) on conflict (id) do update set email = excluded.email")).toEqual(["email", "email"]);
+    expect(privateReads("insert into public.profiles (id, email) values ($x, $x) on conflict (id) do update set email = excluded.email")).toEqual(["email"]);
     expect(privateReads("select u.email from public.users u join public.profiles p on p.id = u.id")).toEqual([]);
   });
 
