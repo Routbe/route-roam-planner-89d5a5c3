@@ -203,8 +203,11 @@
   - [x] wasm/rout-zk pq_ratchet.rs: ML-KEM-1024 + X25519 root-stap (HKDF, X-Wing-binding), HMAC-keten met volatile wipe, AES-256-GCM + HMAC in RVE2, out-of-order (max 64 per gat, 64 sleutels), atomisch (state alleen bij succes)
   - [x] ABI 6, reproduceerbare build (officiële 1.95.0, 2x gelijk), nieuwe pin; 10 nieuwe Rust-tests (68 totaal)
   - [x] Worker-ops pq_ratchet.init_session / ratchet_encrypt / ratchet_decrypt / close_session + client; secure.wipe wist sessies; worker-test
-  - [ ] Peer-authenticatie van de bundle (identiteitshandtekening) en waar bundles gepubliceerd worden — besluit eigenaar
-  - [ ] Sessies bewaren over herladen (nu alleen in het werkgeheugen; zou een nieuwe opslagvorm vragen) — besluit eigenaar
+  - [x] Prekey-bundle (1646 B) ondertekend met MDS3-geattesteerde passkey; worker weigert elke initiator-handshake zonder geldige handtekening, MDS3-pass of binnen 30 UTC-dagen (`bundle_rejected`)
+  - [x] Publicatie zonder SQL: serverfunctie `publishMyPrekeyBundle` controleert passkey + MDS3 en schrijft naar Scaleway `users/<uid>/prekey-bundle.json`; publiek op `/@handle/prekey-bundle.json`
+  - [x] Sessies bewaren over herladen: versleutelde IndexedDB `vault_ratchet_sessions` (AES-256-GCM, 12 KiB-buckets, schrijven vóór resultaat, nullen + verwijderen bij sluiten); worker-ops create_prekey_bundle / unlock_vault / lock_vault / load_session_vault
+  - [x] Tests: prekey-bundle, pq-session-vault, integratie (4 verplichte gevallen + E2E met nagebootste Scaleway); Wasm-pin onveranderd
+  - [ ] Echte test op rout.be met hardware-passkey en Scaleway-sleutels
   - [ ] Schermen/transport voor berichten en status-updates
   - [ ] Externe audit + dudect voor de ratchet en de gebruikte RustCrypto-crates
 - [ ] Stap 9: RLS non-interference-model (Z3/Lean) vergeleken met de snapshot in CI
