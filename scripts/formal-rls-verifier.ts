@@ -498,6 +498,8 @@ export class Verifier {
   parse(src: string) { let e = this.parsed.get(src); if (!e) { e = parsePolicyExpr(src); this.parsed.set(src, e); } return e; }
   /** Table-level privilege, or a column-level grant of that privilege on some columns. */
   grant(t: Table, cmd: Cmd) { return (t.grants[APP] ?? []).includes(cmd) || !!t.columnGrants?.[APP]?.[cmd]?.length; }
+  /** Whether rout_app may write column c with cmd (table-level grant, or a column-level grant naming it). */
+  writable(t: Table, cmd: "INSERT" | "UPDATE", c: string) { return (t.grants[APP] ?? []).includes(cmd) || !!t.columnGrants?.[APP]?.[cmd]?.includes(c); }
   /** Reviewed declassifications; an entry with columns applies only while rout_app reads exactly a subset of them. */
   declassification(t: Table, name: string, cmd: Cmd) {
     return this.declassified.find((x) => {
@@ -558,6 +560,8 @@ export class Verifier {
             const update = cmd === "UPDATE" && phase === "check";
             if (update) enc.keptRow = row;
             const refs = enc.otherTenant(row, true, { excludeOwnKey: cmd === "INSERT" && M.WORKSPACE_TABLES.has(t.name), write: phase === "check", update });
+            // A tenant column rout_app may not UPDATE (column-level grants only) keeps its pre-image value.
+            if (update) for (const c of tenantColumns(t).workspace) if (!this.writable(t, "UPDATE", c)) enc.facts.push(enc.kept(row, c));
             if (phase === "using") enc.definitional(row); // a row being written does not exist yet
             if (refs === 0) enc.facts.pop(); // tenantless table: H keeps only the privilege facts below
             goal = this.effective(enc, t, cmd, phase, [row], 0);
@@ -641,6 +645,8 @@ export class Verifier {
       for (const i of t.indexes) { const m = /^CREATE UNIQUE INDEX \S+ ON \S+ USING \w+ \((.+?)\)(?: WHERE .*)?$/.exec(i); if (m) keys.push(m[1]!.split(",").map((s) => s.trim())); }
       for (const k of keys) {
         if (k.some((c) => identity.includes(c) || workspace.includes(c))) continue;
+        // A duplicate-key error needs a write that sets a key column.
+        if (!k.some((c) => this.writable(t, "INSERT", c.replace(/^lower\((.+)\)$/, "$1")) || this.writable(t, "UPDATE", c.replace(/^lower\((.+)\)$/, "$1")))) continue;
         const random = k.length === 1 && /gen_random_uuid\(\)|nextval\(/.test(t.columns.find((c) => c.name === k[0])?.default ?? "");
         if (random) continue;
         if (k.length === 1 && M.IDENTITY_COLUMN.test(k[0]!)) continue;
