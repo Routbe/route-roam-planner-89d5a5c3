@@ -194,7 +194,8 @@ describe("db-pending/0276 + 0277 on a replay of db/ (PGlite)", () => {
     const known = new Set(KNOWN_OPEN.map((k) => k.id));
     expect(v.findings.map((f) => f.id).filter((id) => !known.has(id))).toEqual([]);
     expect(v.findings.map((f) => f.id).filter((id) => CLOSED.includes(id))).toEqual([]);
-    expect(v.unusedModelEntries.sort()).toEqual(CLOSED.map((id) => `known_open:${id}`).sort());
+    // The two view declassifications are no longer needed either: 0276 makes both views security_invoker.
+    expect(v.unusedModelEntries.sort()).toEqual([...CLOSED.map((id) => `known_open:${id}`), "declassified:public.profile_handles:SELECT", "declassified:public.public_profiles:SELECT"].sort());
     for (const t of [...F8A, "users", "profiles"]) expect(v.obligations.find((o) => o.table === `public.${t}` && o.cmd === "UPDATE" && o.phase === "check")?.outcome.status, t).toBe("proven");
     expect(v.obligations.find((o) => o.table === "public.profiles" && o.cmd === "SELECT")?.outcome.status).toBe("declassified");
     expect(v.obligations.find((o) => o.table === "public.social_links" && o.cmd === "SELECT")?.outcome).toEqual({ status: "proven", via: "smt" });

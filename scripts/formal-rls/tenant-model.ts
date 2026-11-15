@@ -32,8 +32,8 @@ export const DECLASSIFIED: ReadonlyArray<Declassification> = [
   { table: "public.platform_integration_switches", cmd: "SELECT", reason: "global integration switches (db/0241): rout_app reads only provider and mode, no member columns", columns: ["mode", "provider"] },
   { table: "public.alias_profiles", cmd: "SELECT", reason: "only enabled alias pages, which are public profile pages by design" },
   { table: "public.custom_domains", cmd: "SELECT", reason: "only verified domains, needed to route a public host name; the TXT token is published in DNS" },
-  { table: "public.public_profiles", cmd: "SELECT", reason: "public projection of profiles with forwarding_email nulled; read-only since 0275" },
-  { table: "public.profile_handles", cmd: "SELECT", reason: "usernames only, used for handle availability; read-only since 0275" },
+  { table: "public.public_profiles", cmd: "SELECT", reason: "public projection of profiles with forwarding_email nulled; read-only since 0275; leaves with db-pending/0276 (security_invoker)" },
+  { table: "public.profile_handles", cmd: "SELECT", reason: "usernames only, used for handle availability; read-only since 0275; leaves with db-pending/0276 (security_invoker)" },
   { table: "public.account_deletion_audit", cmd: "INSERT", reason: "append-only, no member columns; each row carries an HMAC under the server secret, so a forged row fails verification" },
 ];
 
