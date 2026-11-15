@@ -1,42 +1,50 @@
-# Stap 7 — Anonieme boekingsmotor, deel 7a (fundament)
+# Stap 8 afronden: prekey-bundels, versleutelde sessiekluis en publicatie
 
-Bevestiging: CODE_SCHEMA_LEVEL is 0272 en Neon staat op 0272. Een migratie 0273 komt alleen in db-pending/, met een rollback ernaast. Op Neon gebeurt niets zonder jouw GO. Alles blijft op je eigen infrastructuur.
+Neon blijft op 0274. Er komen geen nieuwe SQL-bestanden in `db/` of `db-pending/`. De Wasm-motor blijft byte-exact gelijk (ABI 6, SHA-384 `6f47f561…`), want de sessietoestand (9888 bytes) komt al als bytes in de worker terecht. Er is dus geen nieuwe Wasm-op nodig.
 
-## Wat er nu echt staat (nagekeken)
-- wasm/rout-zk heeft Cargo.toml, rust-toolchain.toml (1.95.0) en een lib.rs met alleen `#![no_std]`. Er is nog geen logica.
-- De Cargo.toml bevat bls12_381 0.8.0, sha2 en zeroize. **`subtle` staat er niet in**, anders dan het dossier zegt.
-- In de repo staan **geen bestanden met BBS- of Poseidon-testvectoren**. Ze moeten nog worden toegevoegd uit de officiële IETF-draft.
-- In src/lib/crypto-enclave bestaan nog geen bestanden voor pseudoniemen, BBS of Bulletproofs.
-- db-pending/ bevat 0265_booking_ledger.sql (nog niet uitgevoerd) en vier rollbacks. Er is nog geen 0273.
-- **Twee correcties op het dossier:**
-  - De recovery-v4-tabellen op Neon heten recovery_v4_vaults, recovery_v4_ceremonies en recovery_v4_idempotency, niet *_v4-ceremonies/shards/audit.
-  - Hosting: de bouwinstelling bouwt nu standaard voor Cloudflare, terwijl het dossier Vercel noemt.
-- De rustc in de sandbox is 1.95.0, maar "built from a source tarball". De build.sh van rout-opaque weigert zo'n build. Een gepinde .wasm-build met hash kan hier dus niet; die moet via jouw CI (wasm-reproducible.yml) of lokaal met rustup.
+## Twee keuzes die ik vastleg (de opdracht spreekt zichzelf tegen)
+1. **Opslagpad bij Scaleway:** de opdracht noemt zowel `users/<uid>/prekey-bundle.json` als `.bin`. Ik kies `users/<uid>/prekey-bundle.json`: het volledige, ondertekende document dat het publieke adres ongewijzigd teruggeeft.
+2. **Sleutel van de kluis:** `HKDF-SHA256(ikm = PRF-masterseed || host_device_key-seed, salt = "rout.pqr.vault.v1", info = userId)` geeft een niet-exporteerbare AES-256-GCM-sleutel. Zonder `host_device_key`, bijvoorbeeld bij een gast, gebruik ik alleen de PRF-seed met een aparte info-tag. Een sessie gaat dus nooit open met de sleutel van een andere rol.
 
-## Voorstel: Stap 7 opdelen
-Stap 7 is te groot voor één keer: BBS, Bulletproofs, Poseidon-SMT, forward-secure sleutels, migratie, adapters en tests. Ik stel voor om eerst **7a** te bouwen en te laten nakijken.
+## 1. Bundel verplicht controleren in de worker
+- `pq_ratchet.init_session` met rol initiator vraagt voortaan het volledige prekey-document plus `rpId` en `handle`, niet langer een losse engine-bundel.
+- De worker roept eerst `verifyPrekeyDocument()` aan. Elke fout stopt de sessie zonder dat er een toestand ontstaat: geen of een ongeldige passkey-handtekening, verkeerde context of handle, ouder dan 30 UTC-dagen, of een afgekeurd of ontbrekend MDS3-oordeel.
+- Pas daarna haalt de worker de engine-bundel van 1606 bytes uit het document en start `pqrInitiatorInit`.
 
-### 7a — wat ik bouw
-1. **Geheugensandbox in rout-zk:** een vaste werkruimte, geen allocator, geen memory.grow. Ze wordt na elke operatie in een finally gewist met volatile zeroize. Ik gebruik hetzelfde patroon als rout-opaque.
-2. **Pseudoniem per boeking:** `HMAC-SHA256(guest_master_seed, host_id || booking_nonce)` in Rust. De TypeScript-kant komt in `crypto-enclave/pseudonyms.ts`, alleen via de crypto-worker.
-3. **BBS-kern (IETF BBS, BLS12-381-SHA-256):** sleutels maken, tekenen, verifiëren en een bewijs maken en controleren. Dit wordt getoetst aan de officiële fixtures, die ik als testbestanden in de repo zet.
-4. **Blind BBS (draft-05):** een commitment van de gast, blind tekenen door de host en verifiëren. Ook dit wordt getoetst aan de officiële fixtures.
-5. **Tests:** Rust-unit-tests met de fixtures (cargo test, native). Daarnaast Vitest-tests voor de pseudoniemregel: twee boekingen van dezelfde gast bij dezelfde host geven verschillende pseudoniemen.
-6. **Documentatie:** roadmap.md bijwerken en alleen een appendix toevoegen aan HANDOVER.md, met de correcties hierboven.
+## 2. Versleutelde sessiekluis (`src/lib/crypto-enclave/pq-session-vault.ts`)
+- IndexedDB-database `vault_ratchet_sessions`, record `{ v: 1, iv, ct }`, opgevuld tot een vaste bucket van 12 KiB.
+- AAD = `"rout.pqr.session.v1|" userId "|" sessionId`. Een record dat naar een andere sessie of gebruiker is verplaatst, gaat niet open.
+- `ratchet_encrypt` en `ratchet_decrypt` schrijven de nieuwe toestand eerst weg en geven pas daarna het resultaat terug. Mislukt het wegschrijven, dan blijft de oude toestand staan en faalt de stap.
+- `close_session`: het record wordt overschreven met nullen van dezelfde grootte, daarna verwijderd. Alle eigen buffers worden gewist.
 
-### Later, apart, elk met eigen goedkeuring
-- **7b:** Pedersen-capaciteit en Bulletproofs-range-proofs.
-- **7c:** Poseidon-SMT-nullifiers en een door de enclave ondertekende root per epoch.
-- **7d:** forward-secure hostsleutels (SK_t = H(SK_{t-1})).
-- **7e:** `db-pending/0273_anonymous_booking_engine.sql` met rollback en een PGlite-replaytest. Daarbij RLS zonder policies, REVOKE voor public en rout_app, en alleen SECURITY DEFINER met `pg_catalog, pg_temp`. De migratie wordt **niet** uitgevoerd.
-- **7f:** de koppeling met 0265_booking_ledger. Die moet ook nog beslist worden.
+## 3. Worker-ops en client
+Nieuwe ops in `protocol.ts`, `enclave-core.ts`, `pq-ratchet.ts` en `client.ts` (`enclave.pqRatchet.*`):
+- `pq_ratchet.create_prekey_bundle`: maakt een responder-toestand en een 1646-byte bundel en geeft de passkey-uitdaging terug.
+- `pq_ratchet.unlock_vault` / `lock_vault`: kluissleutel afleiden of laten vallen.
+- `pq_ratchet.load_session_vault`: herstelt sessies na een herlaadbeurt.
 
-## Technische details
-- **Pin en hash:** de pin in een `zk-wasm-pin.ts` blijft leeg of geweigerd tot jouw CI de reproduceerbare build levert. De loader weigert elke ongepinde binary, dus er is geen terugval.
-- **Waar de code draait:** de TypeScript-adapters roepen rout-zk alleen in de crypto-worker aan, met getypeerde verzoeken en overgedragen buffers, net als de RVE1-ops.
-- **Constant-time:** constant-time vergelijkingen via bls12_381/`subtle`. `subtle` wordt expliciet toegevoegd.
-- **Grenzen van de verificatie:** ik kan hier `vitest run` en `tsgo` draaien. De reproduceerbare Wasm-hash en de timingtests (dudect) kan ik hier niet aantonen. Dat zeg ik er dan ook eerlijk bij.
+Daarnaast:
+- `secure.wipe` in `password-enclave.ts` vergrendelt de kluis, wist het sessiegeheugen en de sleutelbuffers, en beëindigt lopende sessies.
+- Na een herlaadbeurt herstelt de client sessies automatisch, zodra de kluis is ontgrendeld.
 
-## Wat ik van jou nodig heb
-- GO voor 7a met deze afbakening.
-- Bevestiging dat de .wasm-build met hash via jouw CI of lokaal gebeurt.
+## 4. Publicatie zonder SQL
+- Een serverfunctie voor publicatie (alleen voor ingelogde leden, met hun eigen handle) controleert de passkey-handtekening tegen de geregistreerde passkey in `neon_auth.passkey`. Ze controleert ook het MDS3-oordeel via de bestaande attestatie-lees-functie en het formaat, de leeftijd en de context van het document.
+- Daarna schrijft ze naar Scaleway (`putObject`, interne bucket) onder `users/<uid>/prekey-bundle.json`. Ze leest Neon alleen, en dat via bestaande functies.
+- Publiek adres: `src/routes/$username_.prekey-bundle[.]json.ts`, opgebouwd zoals het bestaande `zkp-anchor.json`. Het geeft het opgeslagen document terug, of `404 not_available` als er geen is of als opslag niet is ingesteld.
+
+## 5. Tests en controle
+Nieuwe tests:
+- `prekey-bundle.test.ts`: aanmaken, handtekening en context; verlopen, gewijzigde en niet-ondertekende bundels worden geweigerd.
+- `pq-session-vault.test.ts`: met `fake-indexeddb` opslaan, overschrijven, herstellen na een gesimuleerde herlaadbeurt, en wissen plus verwijderen bij sluiten.
+- Een integratietest met de 4 verplichte gevallen, plus de hele keten met nagebootste Scaleway-opslag: bundel maken, publiceren, handshake doen, versleutelde berichten uitwisselen.
+- Een test dat `secure.wipe` het geheugen en de kluis volledig wist.
+
+Daarna draai ik `bunx vitest run` (alles groen), `tsgo` (0 fouten) en `zk-wasm-pin.test.ts` (Wasm onveranderd).
+
+## 6. Documentatie
+- In `roadmap.md` vink ik de deeltaken van Stap 8 af.
+- Onderaan `docs/HANDOVER.md` komt een nieuwe bijlage, "Bijlage: Stap 8 — Prekey Bundles en Encrypted Session Vault". De bestaande secties blijven letterlijk staan.
+- In `AGENTS.md` komt één regel over de kluissleutel en het opslagpad.
+
+## Wat ik niet kan controleren
+In deze omgeving zijn geen Scaleway-sleutels en geen echte passkey of hardware. Publicatie en MDS3 test ik daarom met nagebootste opslag en vaste testgegevens. Een echte test op rout.be blijft daarna nodig.
