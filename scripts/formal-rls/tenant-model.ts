@@ -21,7 +21,9 @@ export const IDENTITY_FUNCTIONS = new Set(["rout_current_user_id", "current_app_
  * Public by design. The proof shows these reads are satisfiable for a stranger's
  * row; that is the declassification. Read-only and listed one by one.
  */
-export const DECLASSIFIED: ReadonlyArray<{ table: string; cmd: "SELECT" | "INSERT"; reason: string }> = [
+/** columns: the declassification covers only these columns, and only while rout_app has no table-level SELECT. */
+export type Declassification = { table: string; cmd: "SELECT" | "INSERT"; reason: string; columns?: readonly string[] };
+export const DECLASSIFIED: ReadonlyArray<Declassification> = [
   { table: "public.badges", cmd: "SELECT", reason: "badge catalogue shown on every public profile; no member columns" },
   { table: "public.reserved_brands", cmd: "SELECT", reason: "reserved brand names, checked at sign-up before any identity exists" },
   { table: "public.reserved_handles", cmd: "SELECT", reason: "reserved handles, checked at sign-up before any identity exists" },
@@ -111,6 +113,22 @@ export const INVOKER_VIEWS: ReadonlySet<string> = new Set(["auth.users", "public
  * only for a workspace without any member.
  */
 export const PINNED_FUNCTIONS: Readonly<Record<string, string>> = {
+  // db-pending/0276: true iff the row with that primary key already holds p_ref in the named tenant column.
+  rout_tenant_ref_kept: `
+  select case p_table
+    when 'booking_event_types' then exists (select 1 from public.booking_event_types t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'bookings' then exists (select 1 from public.bookings t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'oauth_clients' then exists (select 1 from public.oauth_clients t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'rout_calendars' then exists (select 1 from public.rout_calendars t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'tracked_qrs' then exists (select 1 from public.tracked_qrs t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'user_assets' then exists (select 1 from public.user_assets t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'webhook_endpoints' then exists (select 1 from public.webhook_endpoints t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'workspace_transfers' then exists (select 1 from public.workspace_transfers t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'profiles' then exists (select 1 from public.profiles t where t.id = p_id and t.workspace_id is not distinct from p_ref)
+    when 'users' then exists (select 1 from public.users t where t.id = p_id and t.migrated_to_workspace_id is not distinct from p_ref)
+    when 'workspaces' then exists (select 1 from public.workspaces t where t.id = p_id and t.legacy_user_id is not distinct from p_ref)
+    else false end
+`,
   rout_workspace_claimable: `
   select exists (select 1 from public.workspaces w where w.id = ws and w.created_at >= pg_catalog.now() - interval '10 minutes')
      and not exists (select 1 from public.workspace_members m where m.workspace_id = ws)
