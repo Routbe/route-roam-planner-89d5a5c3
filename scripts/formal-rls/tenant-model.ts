@@ -29,8 +29,8 @@ export const DECLASSIFIED: ReadonlyArray<{ table: string; cmd: "SELECT" | "INSER
   { table: "public.platform_feature_switches", cmd: "SELECT", reason: "global on/off switches the public pages read; writes need a platform admin" },
   { table: "public.alias_profiles", cmd: "SELECT", reason: "only enabled alias pages, which are public profile pages by design" },
   { table: "public.custom_domains", cmd: "SELECT", reason: "only verified domains, needed to route a public host name; the TXT token is published in DNS" },
-  { table: "public.public_profiles", cmd: "SELECT", reason: "public projection of profiles with forwarding_email nulled; read-only once 0275 runs" },
-  { table: "public.profile_handles", cmd: "SELECT", reason: "usernames only, used for handle availability; read-only once 0275 runs" },
+  { table: "public.public_profiles", cmd: "SELECT", reason: "public projection of profiles with forwarding_email nulled; read-only since 0275" },
+  { table: "public.profile_handles", cmd: "SELECT", reason: "usernames only, used for handle availability; read-only since 0275" },
   { table: "public.account_deletion_audit", cmd: "INSERT", reason: "append-only, no member columns; each row carries an HMAC under the server secret, so a forged row fails verification" },
 ];
 
@@ -45,19 +45,13 @@ export const SERVICE_BOUNDARY: ReadonlyArray<{ schema: string; table: string; re
  * Open findings that are known and tracked (HANDOVER appendix Stap 9). The
  * test fails when this list and the verifier's findings differ either way.
  */
-/** Tables whose INSERT gets the 0275 workspace guard. */
+/** Tables whose INSERT carries the 0275 workspace guard (db/0275). */
 export const F8A = ["booking_event_types", "bookings", "oauth_clients", "rout_calendars", "tracked_qrs", "user_assets", "webhook_endpoints", "workspace_transfers"] as const;
 const ORACLE_OPEN = "personal or externally known identifier: a duplicate-key error tells whether another member holds it; fix by moving writes into a definer that answers uniformly";
 export const KNOWN_OPEN: ReadonlyArray<{ id: string; reason: string }> = [
   { id: "rls:public.profiles:SELECT:using", reason: "F1 rout_public_read = true exposes every profile column (email, legal names, forwarding token, location, Stripe ids) to rout_app; privacy is enforced only in server code. Needs EXPAND (public reads through public_profiles / a definer) before CONTRACT drops the policy" },
   { id: "rls:public.social_links:SELECT:using", reason: "F2 social_links_public_select = true also exposes verification_code and last_error; the owner policies key on app.current_user_id, which the app never sets" },
   { id: "rls:public.workspaces:INSERT:check", reason: "F3 rout_create only checks that a caller exists, so a new workspace may name another member in legacy_user_id; workspace conversion writes legacy_user_id for the source account, so the fix needs that path in a definer first" },
-  { id: "view:public.profile_handles:writable_definer_view", reason: "F4 fixed by db-pending/0275: INSERT/UPDATE/DELETE through an owner-rights view bypass RLS on profiles" },
-  { id: "view:public.public_profiles:writable_definer_view", reason: "F4 fixed by db-pending/0275: same as profile_handles" },
-  { id: "view:auth.users:definer_read", reason: "F5 fixed by db-pending/0275: the view reads public.users with the owner's rights, exposing every e-mail address; 0275 sets security_invoker" },
-  { id: "rls:public.workspace_members:INSERT:check", reason: "F7 fixed by db-pending/0275: rout_scope lets any member add themselves to any workspace with any role" },
-  { id: "rls:public.workspace_members:UPDATE:check", reason: "F7 fixed by db-pending/0275: rout_scope lets a member raise their own role to owner" },
-  ...F8A.map((t) => ({ id: `rls:public.${t}:INSERT:check`, reason: "F8a fixed by db-pending/0275: a member could insert their own row into a workspace they do not belong to" })),
   ...[...F8A, "users", "profiles"].map((t) => ({ id: `rls:public.${t}:UPDATE:check`, reason: "F8b open: an own row can be moved into a foreign workspace by UPDATE; needs a trigger that checks membership only when the workspace column changes" })),
   { id: "rls:public.users:INSERT:check", reason: "F8b open: migrated_to_workspace_id may name a foreign workspace on insert" },
   { id: "rls:public.profiles:INSERT:check", reason: "F8b open: workspace_id may name a foreign workspace on insert" },
