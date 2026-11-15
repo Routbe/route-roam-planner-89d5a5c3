@@ -18,8 +18,9 @@
  * after every operation the held buffer is zero-filled and overwritten in
  * place, a failed decrypt leaves it untouched (the engine commits only on
  * success), and close_session, secure.wipe and worker termination erase it.
- * It is never persisted (Stap 8 keeps all logic in the engine and the
- * worker; no database storage).
+ * With an unlocked session vault (pq-session-vault.ts) every new state is
+ * first written encrypted to IndexedDB and only then replaces the held
+ * buffer, so a reload restores the session; never sent to the server.
  */
 import { wipe } from "@/lib/crypto/wipe";
 import { withZkFrame, zkCheck, ZkEngineError } from "./zk-engine";
@@ -128,6 +129,8 @@ export const isPqSessionId = (v: unknown): v is string => typeof v === "string" 
 export class PqSessionStore {
   private slots = new Map<string, Uint8Array>();
   private busy = new Set<string>();
+  /** Set by the worker: writes a new state before it replaces the held one. */
+  persist: ((owner: string, id: string, state: Uint8Array) => Promise<void>) | null = null;
 
   private key(owner: string, id: string) {
     return `${owner}\u0000${id}`;
@@ -148,6 +151,21 @@ export class PqSessionStore {
     return id;
   }
 
+  /** Re-inserts a state restored from the session vault under its own id (takes ownership). */
+  restore(owner: string, id: string, state: Uint8Array): boolean {
+    const k = this.key(owner, id);
+    if (!isPqSessionId(id) || state.length !== PQR_STATE_BYTES || this.slots.has(k) || this.slots.size >= PQR_MAX_SESSIONS) {
+      wipe(state);
+      return false;
+    }
+    this.slots.set(k, state);
+    return true;
+  }
+
+  has(owner: string, id: string): boolean {
+    return this.slots.has(this.key(owner, id));
+  }
+
   /** Runs `fn` with the held state; a returned `next` replaces it in place (and is wiped). */
   async run<T>(owner: string, id: string, fn: (state: Uint8Array) => Promise<{ next: Uint8Array; out: T }>): Promise<T> {
     const k = this.key(owner, id);
@@ -158,6 +176,8 @@ export class PqSessionStore {
       const { next, out } = await fn(held!);
       try {
         if (next.length !== PQR_STATE_BYTES || this.slots.get(k) !== held) invalid();
+        // Persist first: a failed write keeps the old state and fails the step.
+        if (this.persist) await this.persist(owner, id, next);
         held!.fill(0);
         held!.set(next);
       } finally {
