@@ -50,3 +50,9 @@ export const SRF_LEMMAS: Record<string, { body: string; sql: string; bypassRls: 
     bypassRls: true,
   },
 };
+
+/**
+ * Views created WITH (security_invoker = true). The snapshot has no view
+ * options, so the replay test compares this list with pg_class.reloptions.
+ */
+export const INVOKER_VIEWS: ReadonlySet<string> = new Set(["public.grid_items", "public.ingest_tokens"]);

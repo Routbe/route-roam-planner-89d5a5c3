@@ -549,7 +549,7 @@ export class Verifier {
     for (const v of this.catalog.views) {
       const g = v.grants[APP] ?? [];
       if (!g.length) continue;
-      const invoker = this.catalog.viewOptions?.[`${v.schema}.${v.name}`]?.includes("security_invoker=true");
+      const invoker = M.INVOKER_VIEWS.has(`${v.schema}.${v.name}`);
       if (invoker) continue;
       if (g.some((p) => p !== "SELECT")) views.push({ id: `view:${v.schema}.${v.name}:writable_definer_view`, detail: `${APP} holds ${g.join(",")} on a view that runs with its owner's rights` });
       const d = M.DECLASSIFIED.find((x) => x.table === `${v.schema}.${v.name}`);
