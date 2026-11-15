@@ -189,6 +189,19 @@ describe("db-pending/0276 + 0277 on a replay of db/ (PGlite)", () => {
     await db.query(`delete from public.workspace_invites where workspace_id = $1`, [ids.aliceWs]);
   });
 
+  it("a @handle workspace transfer reveals the owner's address only to its source, after the source's own code", async () => {
+    const t = (await db.query<{ id: string }>(`insert into public.workspace_transfers (source_user_id, target_user_id, target_email, workspace_name, token_hash)
+      values ($1, $2, '@bobrls', 'conv', $3) returning id`, [A, B, "h".repeat(64)])).rows[0]!.id;
+    const addr = async (user: string) => (await as<{ e: string | null }>(user, `select public.rout_transfer_owner_address($1::uuid) as e`, [t])).rows[0]!.e;
+    expect(await addr(A)).toBeNull();
+    await db.query(`update public.workspace_transfers set otp_verified_at = now(), status = 'otp_ok' where id = $1`, [t]);
+    expect(await addr(A)).toBe(`${MARK}@example.test`);
+    expect(await addr(B)).toBeNull();
+    await db.query(`update public.workspace_transfers set status = 'cancelled' where id = $1`, [t]);
+    expect(await addr(A)).toBeNull();
+    await db.query(`delete from public.workspace_transfers where id = $1`, [t]);
+  });
+
   it("Z3 proves 0276 + 0277: F1, F2, F3 and F8b are closed, nothing new opens, and every reviewed entry is used", async () => {
     const v = await verify();
     const known = new Set(KNOWN_OPEN.map((k) => k.id));
