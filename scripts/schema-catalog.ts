@@ -45,6 +45,8 @@ export type Table = {
   forceRls: boolean;
   policies: Policy[];
   grants: Record<string, string[]>;
+  /** Column-level grants (role -> privilege -> columns), present only when a table has any. */
+  columnGrants?: Record<string, Record<string, string[]>>;
 };
 export type Sequence = {
   schema: string;
@@ -103,13 +105,28 @@ function grantMap(rows: Record<string, unknown>[], k: string): Record<string, st
   return out;
 }
 
+function columnGrantMap(rows: Record<string, unknown>[], k: string): { columnGrants?: Record<string, Record<string, string[]>> } {
+  const out: Record<string, Record<string, string[]>> = {};
+  for (const r of rows) {
+    if (key(r["schema"], r["name"]) !== k) continue;
+    ((out[String(r["grantee"])] ??= {})[String(r["privilege"])] ??= []).push(String(r["col"]));
+  }
+  if (!Object.keys(out).length) return {};
+  const sorted: Record<string, Record<string, string[]>> = {};
+  for (const role of Object.keys(out).sort()) {
+    sorted[role] = {};
+    for (const priv of Object.keys(out[role]!).sort()) sorted[role]![priv] = [...new Set(out[role]![priv])].sort();
+  }
+  return { columnGrants: sorted };
+}
+
 /** Normalizes catalog text that differs only cosmetically between Postgres versions. */
 export function normalizeDef(def: string): string {
   return def.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").trim();
 }
 
 export async function readCatalog(exec: Exec): Promise<Catalog> {
-  const [schemas, extensions, enums, sequences, tables, columns, constraints, indexes, triggers, policies, views, functions, relGrants, schemaGrants] =
+  const [schemas, extensions, enums, sequences, tables, columns, constraints, indexes, triggers, policies, views, functions, relGrants, schemaGrants, colGrants] =
     await Promise.all([
       exec(`select nspname from pg_namespace where nspname in (${S}) order by 1`),
       exec(`select extname from pg_extension where extname <> 'plpgsql' order by 1`),
@@ -187,6 +204,12 @@ export async function readCatalog(exec: Exec): Promise<Catalog> {
               from pg_namespace n, lateral aclexplode(n.nspacl) x
               join pg_roles r on r.oid = x.grantee
              where n.nspname in (${S}) and r.rolname in (${R})`),
+      exec(`select n.nspname as schema, c.relname as name, a.attname as col, r.rolname as grantee, x.privilege_type as privilege
+              from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace,
+                   lateral aclexplode(a.attacl) x
+              join pg_roles r on r.oid = x.grantee
+             where n.nspname in (${S}) and c.relkind in ('r', 'p') and a.attnum > 0 and not a.attisdropped
+               and a.attacl is not null and r.rolname in (${R})`),
     ]);
 
   // The migration ledger belongs to the runners, not to the schema.
@@ -226,6 +249,7 @@ export async function readCatalog(exec: Exec): Promise<Catalog> {
         }))
         .sort((a, b) => (a.name < b.name ? -1 : 1)),
       grants: grantMap(relGrants, k),
+      ...columnGrantMap(colGrants, k),
     };
   });
 
@@ -323,6 +347,7 @@ export function diffCatalogs(expected: Catalog, actual: Catalog): string[] {
     cmp(`policy ${name}`, t.policies, u.policies, (p) => p.name);
     if (t.rls !== u.rls || t.forceRls !== u.forceRls) out.push(`~ rls ${name} differs`);
     if (JSON.stringify(t.grants) !== JSON.stringify(u.grants)) out.push(`~ grants ${name} differ`);
+    if (JSON.stringify(t.columnGrants ?? {}) !== JSON.stringify(u.columnGrants ?? {})) out.push(`~ column grants ${name} differ`);
   }
   for (const name of B.keys()) if (!A.has(name)) out.push(`+ table ${name} (unexpected)`);
   if (JSON.stringify(expected.schemaGrants) !== JSON.stringify(actual.schemaGrants)) out.push("~ schema grants differ");
@@ -422,6 +447,9 @@ export function renderBaseline(catalog: Catalog, opts: { covers: number; seedSql
     L.push(`grant ${privs.join(", ").toLowerCase()} on schema ${qi(schema)} to ${qi(role)};`);
   }
   for (const t of catalog.tables) L.push(...grantSql(qn(t.schema, t.name), t.grants));
+  for (const t of catalog.tables)
+    for (const [role, privs] of Object.entries(t.columnGrants ?? {}))
+      for (const [priv, cols] of Object.entries(privs)) L.push(`grant ${priv.toLowerCase()} (${cols.map(qi).join(", ")}) on ${qn(t.schema, t.name)} to ${qi(role)};`);
   for (const v of catalog.views) L.push(...grantSql(qn(v.schema, v.name), v.grants));
   for (const s of catalog.sequences) L.push(...grantSql(qn(s.schema, s.name), s.grants, "sequence"));
   L.push("", "reset check_function_bodies;", "", "-- Reference data seeded by the covered migrations.", opts.seedSql.trim(), "");
