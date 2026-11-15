@@ -590,6 +590,7 @@ export class Verifier {
       ...M.DECLASSIFIED.filter((d) => !usedDecl.has(`${d.table}:${d.cmd}`)).map((d) => `declassified:${d.table}:${d.cmd}`),
       ...Object.keys(M.ORACLE_REVIEW).filter((k) => !oracleSeen.has(k)).map((k) => `oracle_review:${k}`),
       ...M.SERVICE_BOUNDARY.filter((s) => !usedService.has(`${s.schema}.${s.table}`)).map((s) => `service:${s.schema}.${s.table}`),
+      ...M.KNOWN_OPEN.filter((k) => !findings.some((f) => f.id === k.id)).map((k) => `known_open:${k.id}`),
       ...Object.keys(M.SRF_LEMMAS).filter((n) => !this.lemmaUse.has(n)).map((n) => `lemma:${n}`),
     ];
     return { obligations, smtChecks, enclave: { tables: vt.length, findings: enclaveFindings }, searchPath: { definers: definers.length, findings: spFindings }, views, oracles, findings, unusedModelEntries };
