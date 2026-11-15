@@ -73,8 +73,8 @@ export async function listSepaReviews(options: {
   const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
 
   // Admin queue: the member's address is a private column, read through the admin definer.
-  const { adminPrivateProfilesSource } = await import("@/lib/profile-private.server");
-  const privSource = String((await adminPrivateProfilesSource()).text ?? "");
+  const { adminPrivateProfilesText } = await import("@/lib/profile-private.server");
+  const privSource = await adminPrivateProfilesText();
   const rows = (await sql.query(
     `select q.*, pp.email as member_email, p.display_name as member_name
        from public.sepa_review_queue q

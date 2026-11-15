@@ -76,10 +76,14 @@ export async function readAdminPrivateProfiles(ids: string[]): Promise<Map<strin
  * SQL source with the admin-visible private columns (id, email, forwarding_email, ...), for joins in
  * admin listings that filter on them. A constant fragment: never built from input.
  */
-export async function adminPrivateProfilesSource() {
-  return sql.unsafe((await hasSchemaFeature("0276"))
+export async function adminPrivateProfilesText(): Promise<string> {
+  return (await hasSchemaFeature("0276"))
     ? "(select * from public.rout_admin_profiles_private())"
-    : "(select id, email, forwarding_email, legal_first_name, legal_last_name, last_city, last_country, last_location_at from public.profiles)");
+    : "(select id, email, forwarding_email, legal_first_name, legal_last_name, last_city, last_country, last_location_at from public.profiles)";
+}
+/** The same source as a raw fragment for tagged templates. */
+export async function adminPrivateProfilesSource() {
+  return sql.unsafe(await adminPrivateProfilesText());
 }
 
 /** The profile a forwarding verification link belongs to. */
