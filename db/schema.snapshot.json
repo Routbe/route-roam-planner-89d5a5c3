@@ -1923,6 +1923,13 @@
         "rout_app": [
           "DELETE"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "SELECT": [
+            "consumed_by"
+          ]
+        }
       }
     },
     {
@@ -2551,7 +2558,21 @@
           "check": null
         }
       ],
-      "grants": {}
+      "grants": {},
+      "columnGrants": {
+        "rout_app": {
+          "SELECT": [
+            "bot_revoked_at",
+            "claimed_at",
+            "client_id",
+            "created_at",
+            "workspace_id"
+          ],
+          "UPDATE": [
+            "bot_revoked_at"
+          ]
+        }
+      }
     },
     {
       "schema": "public",
@@ -3321,6 +3342,15 @@
           "INSERT",
           "SELECT"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "UPDATE": [
+            "name",
+            "revoked_at",
+            "updated_at"
+          ]
+        }
       }
     },
     {
@@ -3614,6 +3644,14 @@
           "DELETE",
           "SELECT"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "UPDATE": [
+            "accepted_at",
+            "show_on_name"
+          ]
+        }
       }
     },
     {
@@ -6673,6 +6711,14 @@
           "INSERT",
           "SELECT"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "UPDATE": [
+            "blocked",
+            "reason"
+          ]
+        }
       }
     },
     {
@@ -11820,6 +11866,13 @@
         "rout_app": [
           "DELETE"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "SELECT": [
+            "user_id"
+          ]
+        }
       }
     },
     {
@@ -12474,6 +12527,13 @@
           "DELETE",
           "SELECT"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "UPDATE": [
+            "revoked_at"
+          ]
+        }
       }
     },
     {
@@ -14663,6 +14723,14 @@
         "rout_app": [
           "SELECT"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "UPDATE": [
+            "label",
+            "status"
+          ]
+        }
       }
     },
     {
@@ -14854,7 +14922,15 @@
           "check": null
         }
       ],
-      "grants": {}
+      "grants": {},
+      "columnGrants": {
+        "rout_app": {
+          "SELECT": [
+            "mode",
+            "provider"
+          ]
+        }
+      }
     },
     {
       "schema": "public",
@@ -16146,6 +16222,31 @@
         "rout_app": [
           "DELETE"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "SELECT": [
+            "answer",
+            "answered_at",
+            "body",
+            "created_at",
+            "id",
+            "is_quarantined",
+            "owner_id",
+            "prompt",
+            "published",
+            "space",
+            "story_until",
+            "style_masked",
+            "visible_after"
+          ],
+          "UPDATE": [
+            "answer",
+            "answered_at",
+            "published",
+            "story_until"
+          ]
+        }
       }
     },
     {
@@ -17828,6 +17929,18 @@
         "rout_app": [
           "DELETE"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "SELECT": [
+            "last4",
+            "mode",
+            "provider",
+            "publishable_key",
+            "user_id",
+            "verified_at"
+          ]
+        }
       }
     },
     {
@@ -19496,6 +19609,14 @@
         "rout_app": [
           "DELETE"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "SELECT": [
+            "created_at",
+            "user_id"
+          ]
+        }
       }
     },
     {
@@ -19899,6 +20020,16 @@
           "DELETE",
           "SELECT"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "UPDATE": [
+            "decided_at",
+            "decided_by",
+            "notes",
+            "status"
+          ]
+        }
       }
     },
     {
@@ -24648,6 +24779,15 @@
         "rout_app": [
           "SELECT"
         ]
+      },
+      "columnGrants": {
+        "rout_app": {
+          "UPDATE": [
+            "provider_ref",
+            "status",
+            "updated_at"
+          ]
+        }
       }
     },
     {
