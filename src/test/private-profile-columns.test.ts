@@ -32,9 +32,9 @@ export function privateReads(q: string): string[] {
   const hits = (part: string) => [...part.matchAll(COL)].map((m) => m[1]!.toLowerCase());
   const upd = /^update\s+(?:public\.)?profiles\s+set\s+(.*?)(?:\s+where\s+(.*))?$/i.exec(s);
   if (upd) {
-    const assigned = hits(upd[1]!).filter((c) => !new RegExp(`\\b${c}\\s*=`, "i").test(upd[1]!));
-    const rhs = upd[1]!.split(",").flatMap((a) => hits(a.split("=").slice(1).join("=")));
-    return [...assigned, ...rhs, ...hits(upd[2] ?? "")];
+    // Drop each assignment target ("col =" at the start or after a comma); what remains is read.
+    const values = upd[1]!.replace(/(^|,)\s*[\w.]+\s*=(?!=)/g, "$1");
+    return [...hits(values), ...hits(upd[2] ?? "")];
   }
   const ins = /^insert\s+into\s+(?:public\.)?profiles\s*\(([^)]*)\)\s*values\s*\((.*?)\)(.*)$/i.exec(s);
   if (ins) return hits(ins[3]!);
