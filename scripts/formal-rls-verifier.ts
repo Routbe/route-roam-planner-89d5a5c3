@@ -519,7 +519,7 @@ export class Verifier {
             const row = enc.newRow(t, t.name);
             (row as Row & { tenant?: boolean }).tenant = true;
             const refs = enc.otherTenant(row, true, { excludeOwnKey: cmd === "INSERT" && M.WORKSPACE_TABLES.has(t.name), write: phase === "check" });
-            enc.definitional(row);
+            if (phase === "using") enc.definitional(row); // a row being written does not exist yet
             if (refs === 0) enc.facts.pop(); // tenantless table: H keeps only the privilege facts below
             goal = this.effective(enc, t, cmd, phase, [row], 0);
           } catch (e) {
