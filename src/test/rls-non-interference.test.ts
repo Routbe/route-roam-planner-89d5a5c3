@@ -350,7 +350,10 @@ describe("multi-tenant attacks on a replay of db/ (PGlite)", () => {
 
     await db.exec(`begin;\n${SQL}\n;\n${migrationDefinerGuardSql(FILE)};\ncommit;`);
     expect(await attack()).toEqual({ rewrite: 0, handle: 0, emails: 0, ownEmail: 1, publicRead: 1, selfJoin: 0, plant: 0 });
-    expect(await as(A, `update public.workspace_members set role = 'owner' where user_id = $1`, [A]).then((r) => r.affectedRows)).toBe(0);
+    // A viewer in Bob's workspace can no longer promote herself.
+    await db.query(`insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'viewer')`, [ids.bobWs, A]);
+    expect(await as(A, `update public.workspace_members set role = 'owner' where workspace_id = $1 and user_id = $2`, [ids.bobWs, A]).then((r) => r.affectedRows, () => 0)).toBe(0);
+    await db.query(`delete from public.workspace_members where workspace_id = $1 and user_id = $2`, [ids.bobWs, A]);
     expect(await legit()).toEqual({ promoted: 1, team: 2, left: 1 });
     // An old workspace without members cannot be claimed.
     await db.query(`insert into public.workspaces (id, name, slug, created_at) values ('00000000-0000-4000-c000-000000000001', 'old', 'old-orphan-ws', now() - interval '1 day')`);
