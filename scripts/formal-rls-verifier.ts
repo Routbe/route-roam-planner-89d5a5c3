@@ -496,8 +496,8 @@ export class Verifier {
   }
   srfLemma(name: string) { const l = this.lemmas.get(name) ?? null; if (l) this.lemmaUse.add(name); return l; }
   parse(src: string) { let e = this.parsed.get(src); if (!e) { e = parsePolicyExpr(src); this.parsed.set(src, e); } return e; }
-  /** Table-level privilege, or (SELECT only) a column-level grant on some columns. */
-  grant(t: Table, cmd: Cmd) { return (t.grants[APP] ?? []).includes(cmd) || (cmd === "SELECT" && !!t.columnGrants?.[APP]?.["SELECT"]?.length); }
+  /** Table-level privilege, or a column-level grant of that privilege on some columns. */
+  grant(t: Table, cmd: Cmd) { return (t.grants[APP] ?? []).includes(cmd) || !!t.columnGrants?.[APP]?.[cmd]?.length; }
   /** Reviewed declassifications; an entry with columns applies only while rout_app reads exactly a subset of them. */
   declassification(t: Table, name: string, cmd: Cmd) {
     return this.declassified.find((x) => {
