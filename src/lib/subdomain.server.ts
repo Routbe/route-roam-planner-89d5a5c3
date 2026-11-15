@@ -276,12 +276,13 @@ export async function claimRootSubdomainFor(userId: string): Promise<{
   status: "pending_dns" | "active";
 }> {
   const rows = (await sql`
-    select username, subdomain_alias, email, full_name, root_subdomain_status, subdomain_tier
+    select username, subdomain_alias, display_name as full_name, root_subdomain_status, subdomain_tier
       from public.profiles
      where id = ${userId}
      limit 1
   `) as Row[];
-  const row = rows[0];
+  const { readMyPrivateProfile } = await import("@/lib/profile-private.server");
+  const row = rows[0] ? { ...rows[0], email: (await readMyPrivateProfile(userId))?.email ?? null } : undefined;
   if (!row) throw new Error("Profiel niet gevonden.");
 
   const handle = (

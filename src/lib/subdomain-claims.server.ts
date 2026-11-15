@@ -55,10 +55,13 @@ export async function fetchRootClaims(filters: {
   const like = search ? `%${search}%` : null;
   const limit = Math.min(Math.max(filters.limit ?? 200, 1), 500);
 
+  // Admin listing: the member's address comes from the admin definer (private column).
+  const { adminPrivateProfilesSource } = await import("@/lib/profile-private.server");
   const rows = (await sql`
-    select c.*, p.username, p.display_name, p.email, p.root_subdomain_status
+    select c.*, p.username, p.display_name, pp.email, p.root_subdomain_status
       from public.subdomain_root_claims c
       left join public.profiles p on p.id = c.user_id
+      left join ${await adminPrivateProfilesSource()} pp on pp.id = c.user_id
      where (${status} = 'all'
             or (${status} = 'pending_dns' and coalesce(p.root_subdomain_status, c.status) = 'pending_dns')
             or (${status} = 'active' and coalesce(p.root_subdomain_status, c.status) = 'active')
@@ -66,7 +69,7 @@ export async function fetchRootClaims(filters: {
        and (${like}::text is null
             or lower(coalesce(p.username, '')) like ${like}
             or lower(coalesce(p.display_name, '')) like ${like}
-            or lower(coalesce(p.email, '')) like ${like}
+            or lower(coalesce(pp.email, '')) like ${like}
             or lower(c.requested_subdomain) like ${like})
      order by c.created_at desc
      limit ${limit}
@@ -77,14 +80,16 @@ export async function fetchRootClaims(filters: {
 /** Claims van één gebruiker (Studio-overzicht). */
 export async function fetchMyClaims(userId: string): Promise<ClaimRow[]> {
   const rows = (await sql`
-    select c.*, p.username, p.display_name, p.email, p.root_subdomain_status
+    select c.*, p.username, p.display_name, p.root_subdomain_status
       from public.subdomain_root_claims c
       left join public.profiles p on p.id = c.user_id
      where c.user_id = ${userId}
      order by c.created_at desc
      limit 20
   `) as Array<Record<string, unknown>>;
-  return rows.map(toRow);
+  const { readMyPrivateProfile } = await import("@/lib/profile-private.server");
+  const email = rows.length ? (await readMyPrivateProfile(userId))?.email ?? null : null;
+  return rows.map((r) => toRow({ ...r, email }));
 }
 
 /** Forceert `pending_dns` → `active` (beheerdersactie of DNS-cron). */
@@ -163,13 +168,15 @@ export async function resendClaimMails(claimId: string): Promise<{
   user_email: string;
 }> {
   const rows = (await sql`
-    select c.id, c.requested_subdomain, p.email, p.display_name, p.username
+    select c.id, c.user_id, c.requested_subdomain, p.display_name, p.username
       from public.subdomain_root_claims c
       left join public.profiles p on p.id = c.user_id
      where c.id = ${claimId}
      limit 1
   `) as Array<Record<string, unknown>>;
-  const claim = rows[0];
+  const { readAdminPrivateProfiles } = await import("@/lib/profile-private.server");
+  const owner = rows[0]?.["user_id"] ? String(rows[0]["user_id"]) : null;
+  const claim = rows[0] ? { ...rows[0], email: owner ? (await readAdminPrivateProfiles([owner])).get(owner)?.email ?? null : null } : undefined;
   if (!claim) throw new Error("Claim niet gevonden");
 
   const subdomain = String(claim["requested_subdomain"]);
