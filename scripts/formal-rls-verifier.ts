@@ -427,7 +427,8 @@ export class Verifier {
   private readonly lemmaUse = new Set<string>();
   private readonly lemmas = new Map<string, Sel | null>();
   private readonly parsed = new Map<string, Expr>();
-  constructor(readonly catalog: Catalog) {
+  /** viewOptions: "schema.name" → pg_class.reloptions, when read from a live database; defaults to the reviewed list. */
+  constructor(readonly catalog: Catalog, private readonly viewOptions?: Record<string, string[]>) {
     for (const t of catalog.tables) if (t.schema === "public" || t.schema === "vault_enclave") this.tables.set(t.schema === "public" ? t.name : `vault_enclave.${t.name}`, t);
     for (const f of catalog.functions) {
       const m = /RETURNS\s+(SETOF\s+)?([\w ."\[\]]+?)\n/.exec(f.def);
@@ -505,6 +506,8 @@ export class Verifier {
           for (const f of enc.literalFacts()) s.add(f);
           s.add(Z.Not(enc.admin));
           s.add(Z.Not(enc.purgeActive));
+          // H must be satisfiable on its own, or UNSAT below would prove nothing.
+          if ((await s.check()) !== "sat") { push({ status: "unproven", why: "unsupported", detail: "tenant hypothesis is unsatisfiable (vacuous)" }); continue; }
           s.add(goal);
           const smt = `; ${name} ${cmd} ${phase}: SAT means a stranger's row passes\n${s.toString()}\n(check-sat)\n`;
           smtChecks++;
@@ -514,8 +517,8 @@ export class Verifier {
           (s as { release?: () => void }).release?.();
           if (opts.smtOut) writeFileSync(join(opts.smtOut, `${name}.${cmd}.${phase}.smt2`), smt);
           if (r === "unsat") { push({ status: "proven", via: "smt" }); continue; }
-          const d = cmd === "SELECT" ? M.DECLASSIFIED.find((x) => x.table === name && x.cmd === "SELECT") : undefined;
-          if (d) { usedDecl.add(`${name}:SELECT`); push({ status: "declassified", reason: d.reason }); continue; }
+          const d = M.DECLASSIFIED.find((x) => x.table === name && x.cmd === cmd);
+          if (d) { usedDecl.add(`${name}:${cmd}`); push({ status: "declassified", reason: d.reason }); continue; }
           push({ status: "unproven", why: "satisfiable", detail }, smt);
         }
       }
@@ -550,18 +553,21 @@ export class Verifier {
     for (const v of this.catalog.views) {
       const g = v.grants[APP] ?? [];
       if (!g.length) continue;
-      const invoker = M.INVOKER_VIEWS.has(`${v.schema}.${v.name}`);
+      const key = `${v.schema}.${v.name}`;
+      const invoker = this.viewOptions ? (this.viewOptions[key] ?? []).includes("security_invoker=true") : M.INVOKER_VIEWS.has(key);
       if (invoker) continue;
       if (g.some((p) => p !== "SELECT")) views.push({ id: `view:${v.schema}.${v.name}:writable_definer_view`, detail: `${APP} holds ${g.join(",")} on a view that runs with its owner's rights` });
-      const d = M.DECLASSIFIED.find((x) => x.table === `${v.schema}.${v.name}`);
-      if (d) usedDecl.add(`${v.schema}.${v.name}:SELECT`);
+      const d = M.DECLASSIFIED.find((x) => x.table === key && x.cmd === "SELECT");
+      if (d) usedDecl.add(`${key}:SELECT`);
       else if (g.includes("SELECT")) views.push({ id: `view:${v.schema}.${v.name}:definer_read`, detail: "reads the base table with the owner's rights, so RLS on it does not apply" });
     }
     findings.push(...views);
+    // pushed after the oracle scan below
 
     // Unique keys on writable tenant tables are existence oracles across tenants
     // (a duplicate-key error answers "does a row with this value exist?").
     const oracles: Finding[] = [];
+    const oracleSeen = new Set<string>();
     for (const t of this.catalog.tables.filter((x) => x.schema === "public" && (this.grant(x, "INSERT") || this.grant(x, "UPDATE")))) {
       const { identity, workspace } = tenantColumns(t);
       if (!identity.length && !workspace.length) continue;
@@ -573,12 +579,16 @@ export class Verifier {
         const random = k.length === 1 && /gen_random_uuid\(\)|nextval\(/.test(t.columns.find((c) => c.name === k[0])?.default ?? "");
         if (random) continue;
         if (k.length === 1 && M.IDENTITY_COLUMN.test(k[0]!)) continue;
-        oracles.push({ id: `oracle:${t.name}(${k.join(",")})`, detail: "unique key without a tenant column on a table rout_app can write" });
+        const key = `${t.name}(${k.join(",")})`;
+        oracleSeen.add(key);
+        oracles.push({ id: `oracle:${key}`, detail: M.ORACLE_REVIEW[key] ? `reviewed: ${M.ORACLE_REVIEW[key]}` : "unique key without a tenant column on a table rout_app can write" });
       }
     }
 
+    findings.push(...oracles.filter((o) => !o.detail.startsWith("reviewed:")));
     const unusedModelEntries = [
-      ...M.DECLASSIFIED.filter((d) => !usedDecl.has(`${d.table}:SELECT`)).map((d) => `declassified:${d.table}`),
+      ...M.DECLASSIFIED.filter((d) => !usedDecl.has(`${d.table}:${d.cmd}`)).map((d) => `declassified:${d.table}:${d.cmd}`),
+      ...Object.keys(M.ORACLE_REVIEW).filter((k) => !oracleSeen.has(k)).map((k) => `oracle_review:${k}`),
       ...M.SERVICE_BOUNDARY.filter((s) => !usedService.has(`${s.schema}.${s.table}`)).map((s) => `service:${s.schema}.${s.table}`),
       ...Object.keys(M.SRF_LEMMAS).filter((n) => !this.lemmaUse.has(n)).map((n) => `lemma:${n}`),
     ];

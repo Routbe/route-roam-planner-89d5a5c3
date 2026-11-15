@@ -21,19 +21,65 @@ export const IDENTITY_FUNCTIONS = new Set(["rout_current_user_id", "current_app_
  * Public by design. The proof shows these reads are satisfiable for a stranger's
  * row; that is the declassification. Read-only and listed one by one.
  */
-export const DECLASSIFIED: ReadonlyArray<{ table: string; cmd: "SELECT"; reason: string }> = [];
+export const DECLASSIFIED: ReadonlyArray<{ table: string; cmd: "SELECT" | "INSERT"; reason: string }> = [
+  { table: "public.badges", cmd: "SELECT", reason: "badge catalogue shown on every public profile; no member columns" },
+  { table: "public.reserved_brands", cmd: "SELECT", reason: "reserved brand names, checked at sign-up before any identity exists" },
+  { table: "public.reserved_handles", cmd: "SELECT", reason: "reserved handles, checked at sign-up before any identity exists" },
+  { table: "public.showcase_profiles", cmd: "SELECT", reason: "curated public showcase on the home page; no member columns" },
+  { table: "public.platform_feature_switches", cmd: "SELECT", reason: "global on/off switches the public pages read; writes need a platform admin" },
+  { table: "public.alias_profiles", cmd: "SELECT", reason: "only enabled alias pages, which are public profile pages by design" },
+  { table: "public.custom_domains", cmd: "SELECT", reason: "only verified domains, needed to route a public host name; the TXT token is published in DNS" },
+  { table: "public.public_profiles", cmd: "SELECT", reason: "public projection of profiles with forwarding_email nulled; read-only once 0275 runs" },
+  { table: "public.profile_handles", cmd: "SELECT", reason: "usernames only, used for handle availability; read-only once 0275 runs" },
+  { table: "public.account_deletion_audit", cmd: "INSERT", reason: "append-only, no member columns; each row carries an HMAC under the server secret, so a forged row fails verification" },
+];
 
 /**
  * Tables outside the per-member RLS model. Their rows are reached by the
  * auth adapter before any member identity exists.
  */
-export const SERVICE_BOUNDARY: ReadonlyArray<{ schema: string; table: string; reason: string }> = [];
+const AUTH_ADAPTER = "Better Auth adapter tables: looked up by session token, account or passkey id before any member identity exists, so row security cannot key on the caller (residual risk: a compromised rout_app reads all of them)";
+export const SERVICE_BOUNDARY: ReadonlyArray<{ schema: string; table: string; reason: string }> = ["account", "passkey", "session", "twoFactor", "user", "verification"].map((table) => ({ schema: "neon_auth", table, reason: AUTH_ADAPTER }));
 
 /**
  * Open findings that are known and tracked (HANDOVER appendix Stap 9). The
  * test fails when this list and the verifier's findings differ either way.
  */
-export const KNOWN_OPEN: ReadonlyArray<{ id: string; reason: string }> = [];
+const ORACLE_OPEN = "personal or externally known identifier: a duplicate-key error tells whether another member holds it; fix by moving writes into a definer that answers uniformly";
+export const KNOWN_OPEN: ReadonlyArray<{ id: string; reason: string }> = [
+  { id: "rls:public.profiles:SELECT:using", reason: "F1 rout_public_read = true exposes every profile column (email, legal names, forwarding token, location, Stripe ids) to rout_app; privacy is enforced only in server code. Needs EXPAND (public reads through public_profiles / a definer) before CONTRACT drops the policy" },
+  { id: "rls:public.social_links:SELECT:using", reason: "F2 social_links_public_select = true also exposes verification_code and last_error; the owner policies key on app.current_user_id, which the app never sets" },
+  { id: "rls:public.workspaces:INSERT:check", reason: "F3 rout_create only checks that a caller exists, so a new workspace may name another member in legacy_user_id; workspace conversion writes legacy_user_id for the source account, so the fix needs that path in a definer first" },
+  { id: "view:public.profile_handles:writable_definer_view", reason: "F4 fixed by db-pending/0275: INSERT/UPDATE/DELETE through an owner-rights view bypass RLS on profiles" },
+  { id: "view:public.public_profiles:writable_definer_view", reason: "F4 fixed by db-pending/0275: same as profile_handles" },
+  { id: "view:auth.users:definer_read", reason: "F5 fixed by db-pending/0275: the view reads public.users with the owner's rights, exposing every e-mail address; 0275 sets security_invoker" },
+  ...["users(email_normalized)", "profiles(stripe_account_id)", "identity_links(issuer,provider_sub)", "user_identities(provider,provider_account_id)", "user_linked_accounts(platform,provider_account_id)", "user_snapchat(external_id)", "identity_relays(proxy_email)", "identity_verifications(unique_human_id)"].map((k) => ({ id: `oracle:${k}`, reason: `F6 ${ORACLE_OPEN}` })),
+];
+
+/**
+ * Unique keys without a tenant column on tables rout_app can write, reviewed
+ * one by one. "secret": the value is a hash or random token, so guessing it is
+ * infeasible. "public": the value is public by design and an availability
+ * check is the feature. "internal": a server-generated reference no member chooses.
+ */
+export const ORACLE_REVIEW: Readonly<Record<string, "secret" | "public" | "internal">> = {
+  "account_email_changes(confirm_token_hash)": "secret", "account_email_changes(freeze_token_hash)": "secret",
+  "ambient_weather_locations(token_hash)": "secret", "badge_claim_links(token)": "secret", "bookings(booking_token)": "secret",
+  "bookings(stripe_checkout_session_id)": "secret", "connected_calendars(webhook_channel_id)": "secret",
+  "identity_verification_sessions(state)": "secret", "oauth_access_tokens(token_hash)": "secret", "oauth_clients(client_id)": "secret",
+  "oauth_refresh_tokens(token_hash)": "secret", "oauth_step_up_challenges(challenge)": "secret", "oidc_subjects(sector,subject)": "secret",
+  "omni_ingest_tokens(token_hash)": "secret", "tracked_qrs(dashboard_token)": "secret", "user_custom_presence(api_key_hash)": "secret",
+  "user_sessions(token_hash)": "secret", "workspace_transfers(token_hash)": "secret", "verified_identities(identity_nullifier)": "secret",
+  "verified_identities(national_id_nullifier)": "secret", "verified_identities(provider,provider_sub_nullifier)": "secret",
+  "avatar_objects(path)": "secret", "gallery_objects(path)": "secret",
+  "alias_profiles(lower(handle))": "public", "card_designs(serial)": "public", "card_freezes(serial)": "public", "custom_badges(slug)": "public",
+  "custom_domains(domain)": "public", "domain_claims(domain)": "public", "domain_claims(handle)": "public", "email_aliases(alias)": "public",
+  "oauth_email_forwarding_rules(alias_local)": "public", "platform_feature_switches(feature)": "public", "profiles(username)": "public",
+  "profiles(lower(subdomain_alias))": "public", "profiles(lower(username))": "public", "public_activity(source,external_ref)": "public",
+  "rout_calendars(public_id)": "public", "tracked_qrs(slug)": "public", "user_badges(badge_id,serial_number)": "public",
+  "workspace_root_aliases(handle)": "public", "workspaces(slug)": "public",
+  "identity_link_events(id)": "internal", "omni_matrix_items(id)": "internal", "invoice_deliveries(payment_id)": "internal", "wallet_transactions(reference)": "internal",
+};
 
 /**
  * Set-returning SECURITY DEFINER helpers that policies call inside IN (...).
