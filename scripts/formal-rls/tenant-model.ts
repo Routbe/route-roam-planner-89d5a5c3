@@ -36,6 +36,17 @@ export const DECLASSIFIED: ReadonlyArray<Declassification> = [
   { table: "public.account_deletion_audit", cmd: "INSERT", reason: "append-only, no member columns; each row carries an HMAC under the server secret, so a forged row fails verification" },
 ];
 
+/** Private profile columns (db-pending/0277): only owner, admin, notification and token definers read them. */
+export const PRIVATE_PROFILE_COLUMNS = ["email", "forwarding_email", "forwarding_email_token", "forwarding_email_token_expires_at", "legal_first_name", "legal_last_name", "last_city", "last_country", "last_location_at"] as const;
+/**
+ * Reviewed entries for the held-back db-pending/0277. They move into DECLASSIFIED (and the KNOWN_OPEN
+ * entries F1/F2 leave) in the change that moves 0277 into db/; until then the pending-migration test
+ * passes them to the verifier explicitly.
+ */
+export const PENDING_0277_DECLASSIFIED: ReadonlyArray<Declassification> = [
+  { table: "public.profiles", cmd: "SELECT", reason: "public profile columns (handle, display name, design, badges, status); every private column is withheld from rout_app by column privileges", columns: ["id", "username", "display_name", "tagline", "bio", "avatar_url", "favicon_url", "theme", "card_style", "blocks", "tier", "status", "verified", "verified_at", "verified_legal_name", "is_suspended", "is_banned", "url_style", "created_at", "updated_at", "preferred_language", "business_info", "is_early_believer", "is_paid", "subdomain_enabled", "custom_domain", "bluesky_did", "redirect_target", "show_email_publicly", "forwarding_email_verified", "handle_grant", "payment_method", "moderated_at", "moderated_by", "moderation_reason", "alias_status", "alias_sync_status", "alias_sync_attempts", "alias_sync_error", "alias_synced_at", "referred_by", "referral_count", "country_code", "display_prefs", "is_admin", "subdomain_alias", "subdomain_tier", "root_subdomain_status", "bluesky_handle", "show_vcard_button", "invited_count", "verified_invites", "stripe_account_id", "stripe_account_status", "stripe_charges_enabled", "stripe_payouts_enabled", "show_total_reach", "total_reach_count", "reach_last_synced_at", "total_reach_manual", "is_business", "business_name", "business_vat", "is_influencer", "is_shadowbanned", "profile_descriptions", "workspace_id", "is_early_verified", "early_believer_at"] },
+];
+
 /**
  * Tables outside the per-member RLS model. Their rows are reached by the
  * auth adapter before any member identity exists.
