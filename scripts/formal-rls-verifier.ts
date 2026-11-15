@@ -77,6 +77,9 @@ type V = { kind: "val"; v: any; n: any; exact: boolean };
 type B = { kind: "bool"; t: any; f: any; exact: boolean };
 type Row = { table: Table; alias: string; cols: Map<string, V | B>; tag: string };
 
+const sorts = new WeakMap<object, any>();
+const valSort = (Z: Z3) => { let v = sorts.get(Z); if (!v) { v = Z.Sort.declare("Val"); sorts.set(Z, v); } return v; };
+
 class Encoder {
   private n = 0;
   readonly facts: any[] = [];
@@ -89,7 +92,7 @@ class Encoder {
   private readonly lits = new Map<string, any>();
   private readonly fns = new Map<string, any>();
   constructor(readonly Z: Z3, readonly verifier: Verifier) {
-    this.Val = Z.Sort.declare("Val");
+    this.Val = valSort(Z);
     this.caller = Z.Const("caller", this.Val);
     this.callerN = Z.Bool.const("caller_authenticated");
     this.admin = Z.Bool.const("caller_is_admin");
@@ -462,6 +465,7 @@ export class Verifier {
   async run(opts: { smtOut?: string } = {}): Promise<Report> {
     const { init } = await import("z3-solver");
     const { Context } = await init();
+    const Z = Context("rls");
     const obligations: Obligation[] = [];
     let smtChecks = 0;
     const usedDecl = new Set<string>(), usedService = new Set<string>();
@@ -482,7 +486,6 @@ export class Verifier {
             continue;
           }
           if (!t.policies.some((p) => applies(p, cmd) && p.permissive && phaseExpr(p, phase))) { push({ status: "proven", via: "no_policy" }); continue; }
-          const Z = Context("rls");
           const enc = new Encoder(Z, this);
           let goal: any;
           try {
@@ -506,15 +509,13 @@ export class Verifier {
           const smt = `; ${name} ${cmd} ${phase}: SAT means a stranger's row passes\n${s.toString()}\n(check-sat)\n`;
           smtChecks++;
           const r = await s.check();
+          let detail = r === "unknown" ? "solver returned unknown" : "counterexample exists";
+          if (r === "sat") detail = `caller authenticated=${s.model().eval(enc.callerN, true).toString()}`;
+          (s as { release?: () => void }).release?.();
           if (opts.smtOut) writeFileSync(join(opts.smtOut, `${name}.${cmd}.${phase}.smt2`), smt);
           if (r === "unsat") { push({ status: "proven", via: "smt" }); continue; }
           const d = cmd === "SELECT" ? M.DECLASSIFIED.find((x) => x.table === name && x.cmd === "SELECT") : undefined;
           if (d) { usedDecl.add(`${name}:SELECT`); push({ status: "declassified", reason: d.reason }); continue; }
-          let detail = r === "unknown" ? "solver returned unknown" : "counterexample exists";
-          if (r === "sat") {
-            const m = s.model();
-            detail = `caller authenticated=${m.eval(enc.callerN, true).toString()}`;
-          }
           push({ status: "unproven", why: "satisfiable", detail }, smt);
         }
       }
