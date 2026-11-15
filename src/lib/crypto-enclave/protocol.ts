@@ -253,9 +253,26 @@ export interface EnclaveOps {
    * state stays in the worker.
    */
   "pq_ratchet.init_session": {
-    req: { userId: string; role: "responder"; context: string } | { userId: string; role: "initiator"; context: string; peerBundle: Uint8Array };
-    res: { sessionId: string; bundle?: Uint8Array };
+    req:
+      | { userId: string; role: "responder"; context: string }
+      | { userId: string; role: "initiator"; document: unknown; rpId: string; handle: string; origins: string[] };
+    res: { sessionId: string; bundle?: Uint8Array; prekeyId?: string };
   };
+  /**
+   * Responder side of a published prekey (prekey-bundle.ts): fresh engine
+   * keys, the 1646-byte bundle and the WebAuthn challenge the member's
+   * passkey signs before publication. The session waits for the initiator.
+   */
+  "pq_ratchet.create_prekey_bundle": {
+    req: { userId: string; rpId: string; handle: string };
+    res: { sessionId: string; prekeyId: string; bundle: Uint8Array; challenge: Uint8Array; epoch: number };
+  };
+  /** Seeds transferred and wiped; derives the non-extractable session-vault key. */
+  "pq_ratchet.unlock_vault": { req: { userId: string; prfSeed: Uint8Array; deviceSeed?: Uint8Array }; res: { unlocked: true } };
+  /** Drops the vault key and every in-memory session (records stay encrypted). */
+  "pq_ratchet.lock_vault": { req: Record<string, never>; res: { locked: boolean; wiped: number } };
+  /** Restores this member's sessions from vault_ratchet_sessions after a reload. */
+  "pq_ratchet.load_session_vault": { req: { userId: string }; res: { sessionIds: string[]; dropped: number } };
   /** Plaintext transferred in and wiped; returns one RVE2 envelope. */
   "pq_ratchet.ratchet_encrypt": { req: { userId: string; sessionId: string; plaintext: Uint8Array }; res: { envelope: Uint8Array } };
   /** decrypt_failed for a forged, replayed or altered envelope; the session state is then unchanged. */
@@ -315,6 +332,8 @@ export type EnclaveErrorCode =
   | "password_too_long"
   | "pow_failed"
   | "no_stable_secret"
+  | "bundle_rejected"
+  | "vault_locked"
   | "internal";
 
 export type EnclaveResponse =

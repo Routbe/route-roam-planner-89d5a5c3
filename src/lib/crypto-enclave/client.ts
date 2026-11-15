@@ -242,9 +242,24 @@ export const enclave = {
   pqRatchet: {
     /** Responder: a new session and the RVE2 bundle to hand (authenticated) to the initiator. */
     initResponder: (userId: string, context: string) => callEnclave("pq_ratchet.init_session", { userId, role: "responder", context }),
-    /** Initiator: a new session aimed at a bundle the caller has authenticated. */
-    initInitiator: (userId: string, context: string, peerBundle: Uint8Array) =>
-      callEnclave("pq_ratchet.init_session", { userId, role: "initiator", context, peerBundle: peerBundle.slice() }),
+    /**
+     * Initiator: a new session aimed at a published prekey document
+     * (/@handle/prekey-bundle.json). The worker refuses it (bundle_rejected)
+     * unless its passkey signature, MDS3 verdict and age check out.
+     */
+    initInitiator: (userId: string, document: unknown, rpId: string, handle: string, origins: string[]) =>
+      callEnclave("pq_ratchet.init_session", { userId, role: "initiator", document, rpId, handle, origins: [...origins] }),
+    /** Responder keys + the bundle and challenge the member's passkey signs before publishing. */
+    createPrekeyBundle: (userId: string, rpId: string, handle: string) => callEnclave("pq_ratchet.create_prekey_bundle", { userId, rpId, handle }),
+    /** Seeds are transferred (the caller's copies are emptied). */
+    unlockVault: (userId: string, prfSeed: Uint8Array, deviceSeed?: Uint8Array) =>
+      callEnclave("pq_ratchet.unlock_vault", deviceSeed ? { userId, prfSeed, deviceSeed } : { userId, prfSeed }, deviceSeed ? moved(prfSeed, deviceSeed) : moved(prfSeed)),
+    lockVault: () => callEnclave("pq_ratchet.lock_vault", {}),
+    /** After a reload: unlock, then restore the member's sessions. */
+    restoreSessions: async (userId: string, prfSeed: Uint8Array, deviceSeed?: Uint8Array) => {
+      await callEnclave("pq_ratchet.unlock_vault", deviceSeed ? { userId, prfSeed, deviceSeed } : { userId, prfSeed }, deviceSeed ? moved(prfSeed, deviceSeed) : moved(prfSeed));
+      return callEnclave("pq_ratchet.load_session_vault", { userId });
+    },
     /** Plaintext is transferred (the caller's copy is emptied). */
     encrypt: (userId: string, sessionId: string, plaintext: Uint8Array) =>
       callEnclave("pq_ratchet.ratchet_encrypt", { userId, sessionId, plaintext }, moved(plaintext)),

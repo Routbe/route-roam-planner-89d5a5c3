@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runEnclaveOp } from "./enclave-core";
 import { isRve2Message, pqSessions, PQR_BUNDLE_BYTES, PQR_ENVELOPE_OVERHEAD, PQR_MAX_PLAINTEXT, PQR_STATE_BYTES } from "./pq-ratchet";
 import { lastZkMemoryForTest } from "./zk-engine";
+import { RP, signedPrekey , useEnclave } from "@/test/prekey-test-helpers";
 
 const A = "00000000-0000-4000-8000-00000000a008";
 const B = "00000000-0000-4000-8000-00000000b008";
@@ -29,14 +30,16 @@ const code = async (name: string, args: Record<string, unknown>) => {
 };
 
 async function session() {
-  const bob = await op<{ sessionId: string; bundle: Uint8Array }>("pq_ratchet.init_session", { userId: B, role: "responder", context: CONTEXT });
-  const alice = await op<{ sessionId: string }>("pq_ratchet.init_session", { userId: A, role: "initiator", context: CONTEXT, peerBundle: bob.bundle.slice() });
+  const bob = await signedPrekey(B, "bob");
+  const alice = await op<{ sessionId: string }>("pq_ratchet.init_session", { userId: A, role: "initiator", document: bob.document, handle: "bob", ...RP });
   const send = async (from: string, id: string, text: string) =>
     (await op<{ envelope: Uint8Array }>("pq_ratchet.ratchet_encrypt", { userId: from, sessionId: id, plaintext: enc.encode(text) })).envelope;
   const recv = async (to: string, id: string, envelope: Uint8Array) =>
     dec.decode((await op<{ plaintext: Uint8Array }>("pq_ratchet.ratchet_decrypt", { userId: to, sessionId: id, envelope: envelope.slice() })).plaintext);
   return { bob, alice, send, recv };
 }
+
+useEnclave(runEnclaveOp);
 
 afterEach(async () => {
   await runEnclaveOp("secure.wipe" as never, {});
@@ -45,8 +48,8 @@ afterEach(async () => {
 describe("pq_ratchet worker ops (Stap 8, pinned rout-zk ABI 6)", () => {
   it("handshake + messages both ways, RVE2 envelopes, engine memory zero after every call", async () => {
     const { bob, alice, send, recv } = await session();
-    expect(bob.bundle).toHaveLength(PQR_BUNDLE_BYTES);
-    expect(Array.from(bob.bundle.subarray(0, 6))).toEqual([0x52, 0x56, 0x45, 0x32, 1, 2]);
+    expect(bob.bundle).toHaveLength(1646);
+    expect(Array.from(bob.bundle.subarray(0, 6))).toEqual([0x52, 0x56, 0x45, 0x32, 1, 3]);
     const e1 = await send(A, alice.sessionId, "hallo Bob");
     expect(isRve2Message(e1)).toBe(true);
     expect(e1.length).toBe(PQR_ENVELOPE_OVERHEAD + 9);
@@ -94,14 +97,14 @@ describe("pq_ratchet worker ops (Stap 8, pinned rout-zk ABI 6)", () => {
     expect(await code("pq_ratchet.ratchet_encrypt", { userId: B, sessionId: bob.sessionId, plaintext: enc.encode("x") })).toBe("invalid_input"); // responder sends after receiving
     expect(await code("pq_ratchet.ratchet_encrypt", { userId: A, sessionId: alice.sessionId, plaintext: new Uint8Array(PQR_MAX_PLAINTEXT + 1) })).toBe("invalid_input");
     expect(await code("pq_ratchet.init_session", { userId: A, role: "initiator", context: CONTEXT, peerBundle: new Uint8Array(PQR_BUNDLE_BYTES) })).toBe("invalid_input");
+    expect(await code("pq_ratchet.init_session", { userId: A, role: "initiator", document: {}, handle: "bob", ...RP })).toBe("bundle_rejected");
     expect(await code("pq_ratchet.init_session", { userId: A, role: "responder", context: "" })).toBe("invalid_input");
     expect(await code("pq_ratchet.init_session", { userId: A, role: "other", context: CONTEXT })).toBe("invalid_input");
     expect(await code("pq_ratchet.ratchet_decrypt", { userId: B, sessionId: "pqs_nope", envelope: new Uint8Array(10) })).toBe("invalid_input");
-    // Another context does not open the conversation.
-    const other = await op<{ sessionId: string; bundle: Uint8Array }>("pq_ratchet.init_session", { userId: B, role: "responder", context: `${CONTEXT}-x` });
-    const wrong = await op<{ sessionId: string }>("pq_ratchet.init_session", { userId: A, role: "initiator", context: CONTEXT, peerBundle: other.bundle.slice() });
-    const e = await send(A, wrong.sessionId, "x");
-    expect(await code("pq_ratchet.ratchet_decrypt", { userId: B, sessionId: other.sessionId, envelope: e })).toBe("decrypt_failed");
+    // A bundle published for another handle does not open this conversation.
+    const other = await signedPrekey(B, "carol");
+    expect(await code("pq_ratchet.init_session", { userId: A, role: "initiator", document: other.document, handle: "bob", ...RP })).toBe("bundle_rejected");
+    void send;
   });
 
   it("close_session and secure.wipe zero-fill the held state", async () => {

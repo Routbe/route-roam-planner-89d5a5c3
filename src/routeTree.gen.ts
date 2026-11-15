@@ -73,6 +73,7 @@ import { Route as UsernameAskRouteImport } from './routes/$username_.ask'
 import { Route as UsernameBookingRouteImport } from './routes/$username_.booking'
 import { Route as UsernameDonateRouteImport } from './routes/$username_.donate'
 import { Route as UsernameLiveRouteImport } from './routes/$username_.live'
+import { Route as UsernamePrekeyBundleDotjsonRouteImport } from './routes/$username_.prekey-bundle[.]json'
 import { Route as UsernameTipRouteImport } from './routes/$username_.tip'
 import { Route as UsernameZkpAnchorDotjsonRouteImport } from './routes/$username_.zkp-anchor[.]json'
 import { Route as DotwellKnownAtprotoDidRouteImport } from './routes/[.]well-known.atproto-did'
@@ -763,6 +764,12 @@ const UsernameLiveRoute = UsernameLiveRouteImport.update({
   path: '/$username/live',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UsernamePrekeyBundleDotjsonRoute =
+  UsernamePrekeyBundleDotjsonRouteImport.update({
+    id: '/$username_/prekey-bundle.json',
+    path: '/$username/prekey-bundle.json',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const UsernameTipRoute = UsernameTipRouteImport.update({
   id: '/$username_/tip',
   path: '/$username/tip',
@@ -2800,6 +2807,7 @@ export interface FileRoutesByFullPath {
   '/$username/booking': typeof UsernameBookingRoute
   '/$username/donate': typeof UsernameDonateRoute
   '/$username/live': typeof UsernameLiveRoute
+  '/$username/prekey-bundle.json': typeof UsernamePrekeyBundleDotjsonRoute
   '/$username/tip': typeof UsernameTipRoute
   '/$username/zkp-anchor.json': typeof UsernameZkpAnchorDotjsonRoute
   '/.well-known/atproto-did': typeof DotwellKnownAtprotoDidRoute
@@ -3223,6 +3231,7 @@ export interface FileRoutesByTo {
   '/$username/booking': typeof UsernameBookingRoute
   '/$username/donate': typeof UsernameDonateRoute
   '/$username/live': typeof UsernameLiveRoute
+  '/$username/prekey-bundle.json': typeof UsernamePrekeyBundleDotjsonRoute
   '/$username/tip': typeof UsernameTipRoute
   '/$username/zkp-anchor.json': typeof UsernameZkpAnchorDotjsonRoute
   '/.well-known/atproto-did': typeof DotwellKnownAtprotoDidRoute
@@ -3655,6 +3664,7 @@ export interface FileRoutesById {
   '/$username_/booking': typeof UsernameBookingRoute
   '/$username_/donate': typeof UsernameDonateRoute
   '/$username_/live': typeof UsernameLiveRoute
+  '/$username_/prekey-bundle.json': typeof UsernamePrekeyBundleDotjsonRoute
   '/$username_/tip': typeof UsernameTipRoute
   '/$username_/zkp-anchor.json': typeof UsernameZkpAnchorDotjsonRoute
   '/.well-known/atproto-did': typeof DotwellKnownAtprotoDidRoute
@@ -4092,6 +4102,7 @@ export interface FileRouteTypes {
     | '/$username/booking'
     | '/$username/donate'
     | '/$username/live'
+    | '/$username/prekey-bundle.json'
     | '/$username/tip'
     | '/$username/zkp-anchor.json'
     | '/.well-known/atproto-did'
@@ -4515,6 +4526,7 @@ export interface FileRouteTypes {
     | '/$username/booking'
     | '/$username/donate'
     | '/$username/live'
+    | '/$username/prekey-bundle.json'
     | '/$username/tip'
     | '/$username/zkp-anchor.json'
     | '/.well-known/atproto-did'
@@ -4946,6 +4958,7 @@ export interface FileRouteTypes {
     | '/$username_/booking'
     | '/$username_/donate'
     | '/$username_/live'
+    | '/$username_/prekey-bundle.json'
     | '/$username_/tip'
     | '/$username_/zkp-anchor.json'
     | '/.well-known/atproto-did'
@@ -5383,6 +5396,7 @@ export interface RootRouteChildren {
   UsernameBookingRoute: typeof UsernameBookingRoute
   UsernameDonateRoute: typeof UsernameDonateRoute
   UsernameLiveRoute: typeof UsernameLiveRoute
+  UsernamePrekeyBundleDotjsonRoute: typeof UsernamePrekeyBundleDotjsonRoute
   UsernameTipRoute: typeof UsernameTipRoute
   UsernameZkpAnchorDotjsonRoute: typeof UsernameZkpAnchorDotjsonRoute
   DotwellKnownAtprotoDidRoute: typeof DotwellKnownAtprotoDidRoute
@@ -6005,6 +6019,13 @@ declare module '@tanstack/react-router' {
       path: '/$username/live'
       fullPath: '/$username/live'
       preLoaderRoute: typeof UsernameLiveRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/$username_/prekey-bundle.json': {
+      id: '/$username_/prekey-bundle.json'
+      path: '/$username/prekey-bundle.json'
+      fullPath: '/$username/prekey-bundle.json'
+      preLoaderRoute: typeof UsernamePrekeyBundleDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/$username_/tip': {
@@ -9285,6 +9306,7 @@ const rootRouteChildren: RootRouteChildren = {
   UsernameBookingRoute: UsernameBookingRoute,
   UsernameDonateRoute: UsernameDonateRoute,
   UsernameLiveRoute: UsernameLiveRoute,
+  UsernamePrekeyBundleDotjsonRoute: UsernamePrekeyBundleDotjsonRoute,
   UsernameTipRoute: UsernameTipRoute,
   UsernameZkpAnchorDotjsonRoute: UsernameZkpAnchorDotjsonRoute,
   DotwellKnownAtprotoDidRoute: DotwellKnownAtprotoDidRoute,
