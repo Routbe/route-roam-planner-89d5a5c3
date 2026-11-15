@@ -1,4 +1,5 @@
--- Rollback of db-pending/0276_tenant_column_expand.sql: restores 0275 exactly. Idempotent.
+-- Rollback of db-pending/0276_tenant_column_expand.sql: restores 0275, except that public_profiles and
+-- profile_handles keep security_invoker (Neon already ran them that way before 0276). Idempotent.
 -- Refuses while a pending invite names a member by id alone (its address was never stored).
 do $rb$
 begin
@@ -42,6 +43,3 @@ drop policy if exists rout_ws_insert_guard on public.profiles;
 drop function if exists public.rout_tenant_ref_kept(text, uuid, uuid);
 
 alter policy rout_create on public.workspaces with check (public.rout_current_user_id() is not null);
-
-alter view public.public_profiles reset (security_invoker);
-alter view public.profile_handles reset (security_invoker);
