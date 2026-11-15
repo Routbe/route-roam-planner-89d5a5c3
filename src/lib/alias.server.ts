@@ -126,13 +126,14 @@ export async function pauseAlias(username: string): Promise<AliasResult> {
  */
 export async function provisionAliasForUser(userId: string): Promise<AliasResult> {
   const rows = (await sql`
-    select username, forwarding_email, forwarding_email_verified, is_paid, verified, status,
+    select username, forwarding_email_verified, is_paid, verified, status,
            is_banned, is_suspended
       from public.profiles
      where id = ${userId}
      limit 1
   `) as Row[];
-  const profile = rows[0];
+  const { readMyPrivateProfile } = await import("@/lib/profile-private.server");
+  const profile = rows[0] ? { ...rows[0], forwarding_email: (await readMyPrivateProfile(userId))?.forwarding_email ?? null } : undefined;
 
   if (!profile?.["username"]) return { ok: false, reason: "no_username" };
 

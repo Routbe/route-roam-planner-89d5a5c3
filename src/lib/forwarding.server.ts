@@ -23,12 +23,14 @@ function token(): string {
 export async function readForwardingState(userId: string): Promise<ForwardingState> {
   const { sql } = await import("@/lib/neon");
   const rows = (await sql`
-    select username, forwarding_email, forwarding_email_verified, forwarding_email_token
+    select username, forwarding_email_verified
       from public.profiles
      where id = ${userId}
      limit 1
   `) as Record<string, unknown>[];
-  const data = rows[0];
+  const { readMyPrivateProfile } = await import("@/lib/profile-private.server");
+  const own = rows[0] ? await readMyPrivateProfile(userId) : null;
+  const data = rows[0] ? { ...rows[0], forwarding_email: own?.forwarding_email ?? null, forwarding_email_token: own?.forwarding_email_token ?? null } : undefined;
 
   const email = (data?.["forwarding_email"] as string | null) ?? null;
   const verified = Boolean(data?.["forwarding_email_verified"]);
@@ -183,13 +185,8 @@ export async function confirmForwardingToken(
   if (!value || value.length < 20) return { ok: false, reason: "invalid" };
   const { sql } = await import("@/lib/neon");
 
-  const rows = (await sql`
-    select id, forwarding_email, forwarding_email_token_expires_at
-      from public.profiles
-     where forwarding_email_token = ${value}
-     limit 1
-  `) as Record<string, unknown>[];
-  const profile = rows[0];
+  const { findForwardingToken } = await import("@/lib/profile-private.server");
+  const profile = (await findForwardingToken(value)) as Record<string, unknown> | null;
 
   if (!profile) return { ok: false, reason: "invalid" };
   const expires = profile["forwarding_email_token_expires_at"]

@@ -46,14 +46,16 @@ interface HostRow {
 /** Zoekt het profiel én de boekingsconfiguratie die de maker zelf instelde. */
 async function hostFor(handle: string): Promise<HostRow | null> {
   const rows = (await sql`
-    select p.id, p.username, p.display_name, p.blocks,
-           coalesce(p.forwarding_email, p.email) as email
+    select p.id, p.username, p.display_name, p.blocks
       from public.profiles p
      where lower(p.username) = ${handle.toLowerCase()}
      limit 1
   `) as Row[];
-  const row = rows[0];
-  if (!row) return null;
+  const found = rows[0];
+  if (!found) return null;
+  // The host's address comes from the notification definer: only for a profile with a visible booking block.
+  const { readNotifyAddress } = await import("@/lib/profile-private.server");
+  const row: Row = { ...found, email: await readNotifyAddress(String(found["id"]), "booking_request") };
   const blocks = Array.isArray(row["blocks"]) ? (row["blocks"] as Row[]) : [];
   const block = blocks.find((b) => b?.["kind"] === "booking_request" && b?.["hidden"] !== true);
   if (!block) return null;
@@ -143,10 +145,11 @@ export async function resolveBookingRequest(
   }
 
   const hostRows = (await sql`
-    select display_name, username, coalesce(forwarding_email, email) as email
+    select display_name, username
       from public.profiles where id = ${String(booking["profile_id"])}::uuid limit 1
   `) as Row[];
-  const hostEmail = (hostRows[0]?.["email"] as string | null) ?? "hallo@rout.be";
+  const { readNotifyAddress } = await import("@/lib/profile-private.server");
+  const hostEmail = (await readNotifyAddress(String(booking["profile_id"]), "booking_request")) ?? "hallo@rout.be";
   const hostName =
     (hostRows[0]?.["display_name"] as string | null) ??
     (hostRows[0]?.["username"] as string | null) ??

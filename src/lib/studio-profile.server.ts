@@ -154,12 +154,15 @@ export async function writeStudioProfile(userId: string, input: StudioProfileInp
   // Geverifieerde accounts blijven aan hun wettelijke naam gekoppeld: de handle
   // moet de voornaam/achternaam-structuur volgen (server is de echte poortwachter).
   const identityRows = (await sql`
-    select coalesce(verified, false) as verified,
-           coalesce(nullif(trim(verified_legal_name), ''),
-                    nullif(trim(concat_ws(' ', legal_first_name, legal_last_name)), '')) as legal_name
+    select coalesce(verified, false) as verified, nullif(trim(verified_legal_name), '') as verified_legal_name
       from public.profiles where id = ${userId} limit 1
   `) as Row[];
-  const identity = identityRows[0];
+  const { readMyPrivateProfile } = await import("@/lib/profile-private.server");
+  const own = identityRows[0] ? await readMyPrivateProfile(userId) : null;
+  const legalParts = [own?.legal_first_name, own?.legal_last_name].map((x) => (x ?? "").trim()).filter(Boolean).join(" ");
+  const identity = identityRows[0]
+    ? { verified: identityRows[0]["verified"], legal_name: (identityRows[0]["verified_legal_name"] as string | null) ?? (legalParts || null) }
+    : undefined;
   if (identity && identity["verified"] === true && identity["legal_name"]) {
     const { verifiedHandleError } = await import("./verified-handle");
     const issue = verifiedHandleError(username, (identity["legal_name"] as string | null) ?? null);

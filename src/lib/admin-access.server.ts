@@ -153,14 +153,17 @@ export async function setUserLegalName(opts: {
   if (!first || !last) return { ok: false as const, error: "Voor- en achternaam zijn verplicht." };
   const legalName = `${first} ${last}`;
 
+  // Two statements instead of ON CONFLICT ... excluded.*: reading excluded private columns needs
+  // SELECT on them, which rout_app no longer has from db-pending/0277 on.
   await sql`
     insert into public.profiles (id, legal_first_name, legal_last_name, verified_legal_name, updated_at)
     values (${opts.userId}, ${first}, ${last}, ${legalName}, now())
-    on conflict (id) do update set
-      legal_first_name = excluded.legal_first_name,
-      legal_last_name = excluded.legal_last_name,
-      verified_legal_name = excluded.verified_legal_name,
-      updated_at = now()
+    on conflict (id) do nothing
+  `;
+  await sql`
+    update public.profiles
+       set legal_first_name = ${first}, legal_last_name = ${last}, verified_legal_name = ${legalName}, updated_at = now()
+     where id = ${opts.userId}
   `;
 
   const suggestions = verifiedHandleSuggestionList(legalName);
@@ -217,16 +220,19 @@ export interface UserInsight {
  *  linked social accounts and active feature blocks. */
 export async function getUserInsight(userId: string): Promise<UserInsight | null> {
   const rows = (await sql`
-    select p.id, u.email, p.username, p.display_name, p.verified, p.tier,
-           p.last_country, p.last_city, p.last_location_at,
-           p.legal_first_name, p.legal_last_name, p.verified_legal_name
+    select p.id, u.email, p.username, p.display_name, p.verified, p.tier, p.verified_legal_name
       from public.profiles p
       left join public.users u on u.id = p.id
      where p.id = ${userId}
      limit 1
   `) as Row[];
-  const row = rows[0];
-  if (!row) return null;
+  const base = rows[0];
+  if (!base) return null;
+  // Location, legal names and the profile address are private columns: the admin definer answers.
+  const { readAdminPrivateProfiles } = await import("@/lib/profile-private.server");
+  const priv = (await readAdminPrivateProfiles([userId])).get(userId);
+  const row: Row = { ...base, email: base["email"] ?? priv?.email ?? null, last_country: priv?.last_country ?? null, last_city: priv?.last_city ?? null,
+    last_location_at: priv?.last_location_at ?? null, legal_first_name: priv?.legal_first_name ?? null, legal_last_name: priv?.legal_last_name ?? null };
 
   let sessions: UserInsight["sessions"] = [];
   try {
@@ -378,23 +384,20 @@ export async function setUserVerified(opts: {
   const first = (opts.firstName ?? "").trim();
   const last = (opts.lastName ?? "").trim();
 
-  if (first || last) {
-    await sql`
-      update public.profiles
-         set legal_first_name = coalesce(nullif(${first}, ''), legal_first_name),
-             legal_last_name = coalesce(nullif(${last}, ''), legal_last_name),
-             updated_at = now()
-       where id = ${opts.userId}
-    `;
-  }
+  // Only the names that were given are written (no read of the private columns in SQL).
+  if (first) await sql`update public.profiles set legal_first_name = ${first}, updated_at = now() where id = ${opts.userId}`;
+  if (last) await sql`update public.profiles set legal_last_name = ${last}, updated_at = now() where id = ${opts.userId}`;
 
   const rows = (await sql`
-    select verified_legal_name, legal_first_name, legal_last_name, username,
-           coalesce(forwarding_email, email) as email, preferred_language
+    select verified_legal_name, username, preferred_language
       from public.profiles where id = ${opts.userId} limit 1
   `) as Row[];
-  const row = rows[0];
-  if (!row) return { ok: false as const, error: "Gebruiker niet gevonden." };
+  const base = rows[0];
+  if (!base) return { ok: false as const, error: "Gebruiker niet gevonden." };
+  const { readAdminPrivateProfiles } = await import("@/lib/profile-private.server");
+  const priv = (await readAdminPrivateProfiles([opts.userId])).get(opts.userId);
+  const row: Row = { ...base, legal_first_name: priv?.legal_first_name ?? null, legal_last_name: priv?.legal_last_name ?? null,
+    email: priv?.forwarding_email ?? priv?.email ?? null };
 
   const storedName =
     `${(row["legal_first_name"] as string | null) ?? ""} ${(row["legal_last_name"] as string | null) ?? ""}`.trim();
