@@ -53,16 +53,20 @@ function describeDbError(error: unknown) {
 async function loadAccount(userId: string): Promise<AccountRow | null> {
   const rows = (await sql`
     select
-      p.id, p.email, p.username, p.display_name, p.avatar_url, p.tier, p.status,
+      p.id, p.username, p.display_name, p.avatar_url, p.tier, p.status,
       p.verified, p.verified_at, p.is_early_believer, p.is_paid, p.show_email_publicly,
-      p.forwarding_email, p.forwarding_email_verified, p.bluesky_did,
+      p.forwarding_email_verified, p.bluesky_did,
       coalesce(array_agg(ur.role order by ur.role) filter (where ur.role is not null), '{}') as roles
     from public.profiles p
     left join public.user_roles ur on ur.user_id = p.id
     where p.id = ${userId}
     group by p.id
   `) as Row[];
-  return (rows[0] as AccountRow | undefined) ?? null;
+  if (!rows[0]) return null;
+  // E-mail and forwarding address are private columns: read through the owner definer.
+  const { readMyPrivateProfile } = await import("@/lib/profile-private.server");
+  const own = await readMyPrivateProfile(userId);
+  return { ...(rows[0] as AccountRow), email: own?.email ?? null, forwarding_email: own?.forwarding_email ?? null } as AccountRow;
 }
 
 export const getMyAccount = createServerFn({ method: "GET" })
