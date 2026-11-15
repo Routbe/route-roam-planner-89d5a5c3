@@ -210,7 +210,13 @@
   - [ ] Echte test op rout.be met hardware-passkey en Scaleway-sleutels
   - [ ] Schermen/transport voor berichten en status-updates
   - [ ] Externe audit + dudect voor de ratchet en de gebruikte RustCrypto-crates
-- [ ] Stap 9: RLS non-interference-model (Z3/Lean) vergeleken met de snapshot in CI
+- [ ] Stap 9: RLS non-interference-model (Z3) vergeleken met de snapshot in CI (GO eigenaar 2026-11-15; Neon niet aangeraakt)
+  - [x] scripts/formal-rls-verifier.ts: parser voor alle policy-expressies, Z3-bewijs per tabel/commando/fase (1210 verplichtingen, 519 Z3-checks), vault_enclave deny-all, search_path van 415 definers, views, unieke-sleutel-orakels
+  - [x] src/test/rls-non-interference.test.ts: bewijs op de snapshot, mutaties worden gevangen, PGlite-aanvallen (cross-tenant, vervalste rijen, injectie op elke rout_app-definer, vault_enclave)
+  - [x] db-pending/0275 + rollback: F4/F5 (schrijfbare/eigenaarsviews), F7 (zelf lid/eigenaar worden van elke workspace), F8a (rij planten in vreemde workspace); getest op PGlite
+  - [ ] GO eigenaar voor 0275 op Neon
+  - [ ] F1 profiles volledig leesbaar (EXPAND/CONTRACT), F2 social_links, F3 workspaces.legacy_user_id, F6 orakels, F8b UPDATE naar vreemde workspace, F9 rout_resolve_account geeft e-mail
+  - [ ] neon_auth (Better Auth) buiten het RLS-model: eigen rol voor de auth-adapter
 - [x] /secure/*-documenten met COOP/COEP (wachtwoordpagina's)
 - [x] Wasm SRI (SHA-384) en reproduceerbare build van de wachtwoordmotor: officiële rustup 1.95.0 (LLVM 22.1.2) vastgezet, pin opnieuw gezet, CI .github/workflows/wasm-reproducible.yml (lokaal 2x uit twee mappen gelijk)
 - [ ] Wasm-CI nazorg: eerste run op GitHub bekijken zodra de code daar staat
