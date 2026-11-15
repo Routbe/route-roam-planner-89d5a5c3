@@ -3,14 +3,14 @@
  * Stap 9: formal RLS non-interference.
  *
  * Part 1 runs scripts/formal-rls-verifier.ts on db/schema.snapshot.json, which
- * is the replay of db/ and equals Neon at 0274. Z3 must prove
+ * is the replay of db/ (0275 since the owner's GO of 2026-11-15). Z3 must prove
  * Eval(policy, u1, Row(u2)) = FALSE for every reachable obligation except the
  * reviewed exceptions, and it must catch deliberately broken policies.
  * Part 2 replays db/ on PGlite and attacks it as rout_app: cross-tenant reads and
  * writes, forged rows, every rout_app-callable SECURITY DEFINER function with
  * injection payloads and the other member's id, and the vault_enclave lockout.
- * It also shows that findings F4/F5 are real and that db-pending/0275 closes them
- * (with an idempotent rollback). Nothing touches Neon.
+ * It also shows that 0275 closes F4/F5/F7/F8a (the held rollback reopens them
+ * and is idempotent). Nothing touches Neon.
  */
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
@@ -29,9 +29,9 @@ import { contextStatements } from "@/lib/db-context";
 
 const ROOT = join(__dirname, "..", "..");
 const FILE = "0275_rls_non_interference_hardening.sql";
-const SQL = readFileSync(join(ROOT, "db-pending", FILE), "utf8");
+const SQL = readFileSync(join(ROOT, "db", FILE), "utf8");
 const ROLLBACK = readFileSync(join(ROOT, "db-pending", "0275_rls_non_interference_hardening_rollback.sql"), "utf8");
-/** Verifier findings that db-pending/0275 closes (F4, F5, F7, F8a). */
+/** Verifier findings that db/0275 closed (F4, F5, F7, F8a). */
 const FIXED_BY_0275 = [
   "view:public.profile_handles:writable_definer_view", "view:public.public_profiles:writable_definer_view", "view:auth.users:definer_read",
   "rls:public.workspace_members:INSERT:check", "rls:public.workspace_members:UPDATE:check",
@@ -40,15 +40,16 @@ const FIXED_BY_0275 = [
 const clone = (c: Catalog) => JSON.parse(JSON.stringify(c)) as Catalog;
 const known = new Set(KNOWN_OPEN.map((k) => k.id));
 
-describe("Z3 proof over the 0274 schema snapshot", () => {
+describe("Z3 proof over the 0275 schema snapshot", () => {
   const snapshot = loadSnapshot(ROOT);
   let report: Report;
   beforeAll(async () => { report = await new Verifier(snapshot).run(); }, 120_000);
 
-  it("stays at 0274 and keeps 0275 held back with its rollback", () => {
-    expect(CODE_SCHEMA_LEVEL).toBe("0274");
-    expect(readdirSync(join(ROOT, "db")).filter((f) => f.startsWith("0275"))).toEqual([]);
-    expect(existsSync(join(ROOT, "db-pending", FILE))).toBe(true);
+  it("0275 is in db/ at schema level 0275, with its rollback held in db-pending/", () => {
+    expect(CODE_SCHEMA_LEVEL >= "0275").toBe(true);
+    expect(readdirSync(join(ROOT, "db")).filter((f) => f.startsWith("0275"))).toEqual([FILE]);
+    expect(existsSync(join(ROOT, "db-pending", FILE))).toBe(false);
+    expect(existsSync(join(ROOT, "db-pending", "0275_rls_non_interference_hardening_rollback.sql"))).toBe(true);
     expect(migrationDefinerViolations(FILE, SQL)).toEqual([]);
   });
 
@@ -213,12 +214,11 @@ describe("multi-tenant attacks on a replay of db/ (PGlite)", () => {
     expect(passed).toEqual([]);
   });
 
-  it("finding F7 is real on 0274: Alice can add herself to Bob's workspace as owner, and a viewer can promote herself", async () => {
-    await as(A, `insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'viewer')`, [ids.bobWs, A]);
-    const up = await as(A, `update public.workspace_members set role = 'owner' where workspace_id = $1 and user_id = $2`, [ids.bobWs, A]);
-    expect(up.affectedRows).toBe(1);
-    const seen = await as<{ n: number }>(A, `select count(*)::int as n from public.tracked_qrs where workspace_id = $1 or user_id = $2`, [ids.bobWs, B]);
-    expect(seen.rows[0]!.n).toBe(0); // Bob's QR is personal; but every row Bob's workspace holds would now be open to Alice
+  it("F7 is closed since 0275: Alice cannot add herself to Bob's workspace, and a viewer cannot promote herself", async () => {
+    expect(await as(A, `insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'viewer')`, [ids.bobWs, A]).then(() => "accepted", () => "refused")).toBe("refused");
+    await db.query(`insert into public.workspace_members (workspace_id, user_id, role) values ($1, $2, 'viewer')`, [ids.bobWs, A]);
+    const up = await as(A, `update public.workspace_members set role = 'owner' where workspace_id = $1 and user_id = $2`, [ids.bobWs, A]).then((r) => r.affectedRows, () => 0);
+    expect(up).toBe(0);
     await db.query(`delete from public.workspace_members where workspace_id = $1 and user_id = $2`, [ids.bobWs, A]);
   });
 
