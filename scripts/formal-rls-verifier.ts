@@ -142,28 +142,36 @@ class Encoder {
     row.cols.set(name, c);
     return c;
   }
-  /** H: this row belongs to another tenant. */
-  otherTenant(row: Row, requireReference: boolean, excludeOwnKey = false) {
+  hasMember(w: any) { return this.fn("workspace_has_member", 1, [false], "bool").call(w); }
+  /**
+   * H: this row belongs to another tenant. Read phases (SELECT, UPDATE/DELETE USING):
+   * at least one tenant reference, no identity column names the caller, no named
+   * workspace is the caller's, the handle is not the caller's. Write phases
+   * (INSERT / UPDATE WITH CHECK) also count a row that names the caller but places
+   * it in a workspace someone else holds: writing into a foreign workspace interferes too.
+   */
+  otherTenant(row: Row, requireReference: boolean, opts: { excludeOwnKey?: boolean; write?: boolean } = {}) {
     const Z = this.Z;
     const { identity, workspace, handle } = tenantColumns(row.table);
-    const refs: any[] = [];
+    const refs: any[] = [], read: any[] = [], foreignWs: any[] = [];
     for (const c of identity) {
       const t = this.column(row, c) as V;
       if (t.kind !== "val") continue;
-      this.facts.push(Z.Not(Z.And(this.callerN, t.n, t.v.eq(this.caller))));
+      read.push(Z.Not(Z.And(this.callerN, t.n, t.v.eq(this.caller))));
       refs.push(t.n);
     }
     for (const c of workspace) {
       const t = this.column(row, c) as V;
-      this.facts.push(Z.Not(Z.And(t.n, this.member(t.v))));
-      if (!(excludeOwnKey && c === "id")) refs.push(t.n);
+      read.push(Z.Not(Z.And(t.n, this.member(t.v))));
+      if (!(opts.excludeOwnKey && c === "id")) { refs.push(t.n); foreignWs.push(Z.And(t.n, Z.Not(this.member(t.v)), this.hasMember(t.v))); }
     }
     for (const c of handle) {
       const t = this.column(row, c) as V;
-      this.facts.push(Z.Not(Z.And(t.n, this.callerN, this.unameN(this.caller), this.lower(t.v).eq(this.uname(this.caller)))));
+      read.push(Z.Not(Z.And(t.n, this.callerN, this.unameN(this.caller), this.lower(t.v).eq(this.uname(this.caller)))));
       refs.push(t.n);
     }
-    if (requireReference) this.facts.push(this.or(refs));
+    const readH = this.and(requireReference ? [...read, this.or(refs)] : read);
+    this.facts.push(opts.write && foreignWs.length ? Z.Or(readH, this.or(foreignWs)) : readH);
     return refs.length;
   }
   /** Facts that hold for any row of a table the policy functions are defined over. */
@@ -353,6 +361,14 @@ class Encoder {
       const t = Z.And(w.n, this.member(w.v));
       return T(t, Z.Not(t), w.exact);
     }
+    if (e.name === "rout_workspace_claimable" && e.args.length === 1 && this.verifier.pinned(e.name)) {
+      // Pinned body: true only for a workspace with no member at all (and created minutes ago).
+      const w = this.v(e.args[0]!, sc, depth);
+      const c = this.fn("workspace_claimable", 1, [false], "bool").call(w.v);
+      this.facts.push(this.Z.Implies(this.hasMember(w.v), this.Z.Not(c)));
+      const t = Z.And(w.n, c);
+      return T(t, Z.Not(t), w.exact);
+    }
     if (e.name === "rout_purge_due" && e.args.length === 1) {
       const x = this.v(e.args[0]!, sc, depth);
       const t = Z.And(x.n, this.purgeActive, x.v.eq(this.purgeTarget), this.fn("deletion_due", 1, [false], "bool").call(x.v));
@@ -425,6 +441,7 @@ export class Verifier {
   private readonly tables = new Map<string, Table>();
   private readonly fnReturns = new Map<string, string>();
   private readonly lemmaUse = new Set<string>();
+  readonly pinUse = new Set<string>();
   private readonly lemmas = new Map<string, Sel | null>();
   private readonly parsed = new Map<string, Expr>();
   /** viewOptions: "schema.name" → pg_class.reloptions, when read from a live database; defaults to the reviewed list. */
@@ -441,7 +458,16 @@ export class Verifier {
     }
   }
   table(name: string) { return this.tables.get(name); }
-  returnsBoolean(name: string) { if (name === "rout_caller_is_admin" || name === "rout_is_workspace_member" || name === "rout_purge_due") return true; return this.fnReturns.get(name) === "boolean"; }
+  returnsBoolean(name: string) { if (["rout_caller_is_admin", "rout_is_workspace_member", "rout_purge_due", "rout_workspace_claimable"].includes(name)) return true; return this.fnReturns.get(name) === "boolean"; }
+  /** A helper with a reviewed meaning (tenant-model PINNED_FUNCTIONS) counts only while its body is unchanged. */
+  pinned(name: string) {
+    const want = M.PINNED_FUNCTIONS[name];
+    const fn = this.catalog.functions.find((f) => f.name === name);
+    const body = fn ? /AS \$function\$\n?([\s\S]*?)\n?\$function\$/.exec(fn.def)?.[1] : undefined;
+    const ok = !!want && body?.replace(/\s+/g, " ").trim() === want.replace(/\s+/g, " ").trim();
+    if (ok) this.pinUse.add(name);
+    return ok;
+  }
   srfLemma(name: string) { const l = this.lemmas.get(name) ?? null; if (l) this.lemmaUse.add(name); return l; }
   parse(src: string) { let e = this.parsed.get(src); if (!e) { e = parsePolicyExpr(src); this.parsed.set(src, e); } return e; }
   grant(t: Table, cmd: Cmd) { return (t.grants[APP] ?? []).includes(cmd); }
@@ -492,7 +518,7 @@ export class Verifier {
           try {
             const row = enc.newRow(t, t.name);
             (row as Row & { tenant?: boolean }).tenant = true;
-            const refs = enc.otherTenant(row, true, cmd === "INSERT" && M.WORKSPACE_TABLES.has(t.name));
+            const refs = enc.otherTenant(row, true, { excludeOwnKey: cmd === "INSERT" && M.WORKSPACE_TABLES.has(t.name), write: phase === "check" });
             enc.definitional(row);
             if (refs === 0) enc.facts.pop(); // tenantless table: H keeps only the privilege facts below
             goal = this.effective(enc, t, cmd, phase, [row], 0);

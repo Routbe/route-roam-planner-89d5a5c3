@@ -102,3 +102,15 @@ export const SRF_LEMMAS: Record<string, { body: string; sql: string; bypassRls: 
  * options, so the replay test compares this list with pg_class.reloptions.
  */
 export const INVOKER_VIEWS: ReadonlySet<string> = new Set(["public.grid_items", "public.ingest_tokens"]);
+
+/**
+ * Helpers whose meaning the encoder relies on, pinned to their exact body
+ * (whitespace-insensitive). rout_workspace_claimable (db-pending/0275) is true
+ * only for a workspace without any member.
+ */
+export const PINNED_FUNCTIONS: Readonly<Record<string, string>> = {
+  rout_workspace_claimable: `
+  select exists (select 1 from public.workspaces w where w.id = ws and w.created_at >= pg_catalog.now() - interval '10 minutes')
+     and not exists (select 1 from public.workspace_members m where m.workspace_id = ws)
+`,
+};
