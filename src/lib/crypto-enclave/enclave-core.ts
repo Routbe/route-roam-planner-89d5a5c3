@@ -83,7 +83,10 @@ import {
   verifySlotCredential,
 } from "./anon-booking";
 import { guestVault, GuestVaultError } from "./guest-vault";
-import { isPqSessionId, pqrDecrypt, pqrEncrypt, pqrInitiatorInit, pqrResponderInit, pqSessions, PQR_BUNDLE_BYTES, PQR_MAX_PLAINTEXT } from "./pq-ratchet";
+import { isPqSessionId, pqrDecrypt, pqrEncrypt, pqrInitiatorInit, pqrResponderInit, pqSessions, PQR_MAX_PLAINTEXT } from "./pq-ratchet";
+import { pqSessionVault, PqVaultError } from "./pq-session-vault";
+import { encodePrekeyBundle, prekeyChallenge, prekeyContext, prekeyFromEngineBundle, prekeyHandle, prekeyIdOf, verifyPrekeyDocument, PREKEY_NONCE_BYTES } from "./prekey-bundle";
+import { utcEpochAt } from "@/lib/anon-booking/epoch-clock";
 import {
   RECOVERY_FACTORS,
   VERSION_FACTORS,
@@ -117,6 +120,29 @@ const bytes = (v: unknown): Uint8Array =>
   v instanceof Uint8Array && v.buffer instanceof ArrayBuffer ? v : fail("invalid_input");
 
 /** rout-zk errors to enclave codes: no pin / bad bytes / trap = unavailable, the rest = invalid input. */
+/** New session: persisted to the unlocked session vault before its id is returned. */
+async function createPersisted(owner: string, state: Uint8Array): Promise<string> {
+  const id = shaped(() => pqSessions.create(owner, state));
+  if (pqSessionVault.isOpenFor(owner)) {
+    try {
+      await pqSessionVault.save(owner, id, pqSessions.peek(owner, id)!);
+    } catch {
+      pqSessions.close(owner, id);
+      return fail("enclave_unavailable");
+    }
+  }
+  return id;
+}
+
+pqSessions.persist = async (owner, id, state) => {
+  if (!pqSessionVault.isOpenFor(owner)) return;
+  try {
+    await pqSessionVault.save(owner, id, state);
+  } catch {
+    fail("enclave_unavailable");
+  }
+};
+
 async function zkOp<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
@@ -1266,17 +1292,92 @@ const coreHandlers: CoreHandlers = {
 
   async "pq_ratchet.init_session"(args) {
     const owner = str(args.userId, 200);
-    const context = str(args.context, 512);
     if (args.role === "responder") {
+      const context = str(args.context, 512);
       const { state, bundle } = await zkOp(() => pqrResponderInit(context));
-      const sessionId = shaped(() => pqSessions.create(owner, state));
+      const sessionId = await createPersisted(owner, state);
       return { sessionId, bundle };
     }
     if (args.role !== "initiator") fail("invalid_input");
-    const peer = bytes(args.peerBundle);
-    if (peer.length !== PQR_BUNDLE_BYTES) fail("invalid_input");
-    const state = await zkOp(() => pqrInitiatorInit(context, peer));
-    return { sessionId: shaped(() => pqSessions.create(owner, state)) };
+    // Enforced: a session starts only from a prekey document whose passkey
+    // signature, MDS3 verdict (attested, status safe) and age (≤ 30 UTC days) check out.
+    const rpId = str(args.rpId, 253);
+    const handle = str(args.handle, 64);
+    if (!Array.isArray(args.origins) || args.origins.length === 0 || args.origins.length > 8 || !args.origins.every((o) => typeof o === "string" && o.length <= 300)) fail("invalid_input");
+    const verified = await verifyPrekeyDocument(args.document, { rpId, origins: args.origins, handle });
+    if (!verified.ok) return fail("bundle_rejected");
+    const state = await zkOp(() => pqrInitiatorInit(verified.context, verified.engineBundle));
+    return { sessionId: await createPersisted(owner, state), prekeyId: verified.prekeyId };
+  },
+
+  async "pq_ratchet.create_prekey_bundle"({ userId, rpId, handle }) {
+    const owner = str(userId, 200);
+    const h = prekeyHandle(handle);
+    if (!h) fail("invalid_input");
+    const rp = str(rpId, 253);
+    const epoch = utcEpochAt(Date.now());
+    const nonce = crypto.getRandomValues(new Uint8Array(PREKEY_NONCE_BYTES));
+    const context = shaped(() => { try { return prekeyContext(rp, h!, epoch, nonce); } catch { return fail("invalid_input"); } });
+    const { state, bundle: engine } = await zkOp(() => pqrResponderInit(context));
+    let bundle: Uint8Array;
+    try {
+      bundle = encodePrekeyBundle(prekeyFromEngineBundle(engine, epoch, nonce));
+    } catch {
+      wipe(state);
+      return fail("enclave_unavailable");
+    }
+    const sessionId = await createPersisted(owner, state);
+    return { sessionId, prekeyId: prekeyIdOf(nonce), bundle, challenge: prekeyChallenge(rp, h!, bundle), epoch };
+  },
+
+  async "pq_ratchet.unlock_vault"({ userId, prfSeed, deviceSeed }) {
+    const owner = str(userId, 200);
+    const prf = bytes(prfSeed);
+    const dev = deviceSeed === undefined ? null : bytes(deviceSeed);
+    try {
+      // Another member's sessions never stay in memory next to this one's.
+      if (!pqSessionVault.isOpenFor(owner)) pqSessions.wipeAll();
+      await pqSessionVault.unlock(owner, prf, dev);
+    } catch (e) {
+      wipe(prf);
+      if (dev) wipe(dev);
+      if (e instanceof PqVaultError) return fail("invalid_input");
+      throw e;
+    }
+    return { unlocked: true as const };
+  },
+
+  async "pq_ratchet.lock_vault"() {
+    const locked = pqSessionVault.lock();
+    return { locked, wiped: pqSessions.wipeAll() };
+  },
+
+  async "pq_ratchet.load_session_vault"({ userId }) {
+    const owner = str(userId, 200);
+    if (!pqSessionVault.isOpenFor(owner)) return fail("vault_locked");
+    try {
+      const ids = await pqSessionVault.sessionIds(owner);
+      const restored: string[] = [];
+      let dropped = 0;
+      for (const id of ids) {
+        if (pqSessions.has(owner, id)) {
+          restored.push(id);
+          continue;
+        }
+        let state: Uint8Array | null = null;
+        try {
+          state = await pqSessionVault.load(owner, id);
+        } catch (e) {
+          if (!(e instanceof PqVaultError) || e.code !== "pq_vault_decrypt") throw e;
+        }
+        if (state && pqSessions.restore(owner, id, state)) restored.push(id);
+        else dropped++;
+      }
+      return { sessionIds: restored, dropped };
+    } catch (e) {
+      if (e instanceof PqVaultError) return fail("enclave_unavailable");
+      throw e;
+    }
   },
 
   async "pq_ratchet.ratchet_encrypt"({ userId, sessionId, plaintext }) {
@@ -1317,7 +1418,14 @@ const coreHandlers: CoreHandlers = {
   async "pq_ratchet.close_session"({ userId, sessionId }) {
     const owner = str(userId, 200);
     if (!isPqSessionId(sessionId)) fail("invalid_input");
-    return { closed: pqSessions.close(owner, sessionId) };
+    const closed = pqSessions.close(owner, sessionId);
+    let erased = false;
+    try {
+      erased = await pqSessionVault.erase(owner, sessionId);
+    } catch (e) {
+      if (!(e instanceof PqVaultError)) throw e;
+    }
+    return { closed: closed || erased };
   },
 
   async "anon_host.verify_presentation"({ anchor, links, epoch, minEpoch, presentation, messages, nullifier, challenge, windowStart, windowEnd }) {
